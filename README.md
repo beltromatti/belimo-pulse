@@ -23,6 +23,6 @@ Start Hackathon 2026
 
 ## Deploy
 - Push su `main` soltanto
-- GitHub Actions builda e pubblica il backend
-- GitHub Actions deploya il frontend su Vercel
-- Smoke test automatici su backend pubblico e bridge frontend
+- GitHub Actions job `build_image` builda il backend e pubblica l'immagine su GHCR
+- GitHub Actions job `deploy` fa pull sul server AWS, mette online il container e rimuove le immagini backend obsolete
+- Il frontend usa il Git integration nativo di Vercel sul repository `beltromatti/belimo-pulse`
