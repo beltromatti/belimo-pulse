@@ -1,4 +1,4 @@
-import { cp, rm, stat } from "node:fs/promises";
+import { cp, rm, stat, symlink } from "node:fs/promises";
 import path from "node:path";
 
 async function pathExists(targetPath) {
@@ -18,6 +18,8 @@ async function main() {
   const frontendRoot = process.cwd();
   const frontendNextDir = path.join(frontendRoot, ".next");
   const repoRootNextDir = path.resolve(frontendRoot, "..", ".next");
+  const frontendNodeModulesDir = path.join(frontendRoot, "node_modules");
+  const repoRootNodeModulesDir = path.resolve(frontendRoot, "..", "node_modules");
 
   if (!(await pathExists(frontendNextDir))) {
     return;
@@ -25,8 +27,11 @@ async function main() {
 
   await rm(repoRootNextDir, { force: true, recursive: true });
   await cp(frontendNextDir, repoRootNextDir, { recursive: true });
+  await rm(repoRootNodeModulesDir, { force: true, recursive: true });
+  await symlink(frontendNodeModulesDir, repoRootNodeModulesDir, "dir");
 
   console.log(`Mirrored ${frontendNextDir} to ${repoRootNextDir} for Vercel post-processing.`);
+  console.log(`Linked ${repoRootNodeModulesDir} to ${frontendNodeModulesDir} for Vercel post-processing.`);
 }
 
 main().catch((error) => {
