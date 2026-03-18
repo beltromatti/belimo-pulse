@@ -6,6 +6,7 @@
     "dev": "next dev --webpack",
     "build": "next build",
     "build:webpack": "next build --webpack",
+    "postbuild": "node scripts/prepare-vercel-root.mjs",
     "start": "next start",
     "lint": "eslint"
   },
