@@ -48,8 +48,8 @@ export default function Home() {
             <div>
               <p className="text-2xl font-semibold">Main branch only</p>
               <p className="mt-2 text-sm leading-7 text-slate-300">
-                Le GitHub Actions partono solo su push a <span className="font-mono">main</span>,
-                buildano il container backend e pubblicano il frontend su Vercel.
+                Su push a <span className="font-mono">main</span> il backend passa da GitHub Actions,
+                mentre il frontend viene pubblicato dal Git integration nativo di Vercel.
               </p>
             </div>
             <div>
