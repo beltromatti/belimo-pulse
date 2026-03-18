@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   deploy-backend:
     runs-on: ubuntu-latest
@@ -69,7 +72,18 @@ jobs:
             --env-file /opt/belimo-pulse/backend/.env \
             -p 80:8080 \
             "$IMAGE"
-          curl -fsS http://127.0.0.1/health >/dev/null
+          healthy=0
+          for attempt in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1/health >/dev/null; then
+              healthy=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$healthy" -ne 1 ]; then
+            sudo docker logs belimo-pulse-backend
+            exit 1
+          fi
           EOF
 
       - name: Smoke test backend
