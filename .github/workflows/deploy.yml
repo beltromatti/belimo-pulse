@@ -1,0 +1,122 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy-backend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/belimo-pulse-backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+
+      - name: Prepare SSH
+        env:
+          AWS_EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
+          AWS_EC2_SSH_KEY: ${{ secrets.AWS_EC2_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          printf '%s' "$AWS_EC2_SSH_KEY" > "$HOME/.ssh/belimo"
+          chmod 600 "$HOME/.ssh/belimo"
+          ssh-keyscan -H "$AWS_EC2_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Deploy backend on EC2
+        env:
+          AWS_EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
+          AWS_EC2_USER: ${{ secrets.AWS_EC2_USER }}
+          BACKEND_ENV_FILE_B64: ${{ secrets.BACKEND_ENV_FILE_B64 }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ssh -i "$HOME/.ssh/belimo" "${AWS_EC2_USER}@${AWS_EC2_HOST}" \
+            "BACKEND_ENV_FILE_B64='${BACKEND_ENV_FILE_B64}' GHCR_PULL_TOKEN='${GHCR_PULL_TOKEN}' IMAGE='${IMAGE_NAME}:${IMAGE_TAG}' bash -s" <<'EOF'
+          set -euo pipefail
+          mkdir -p /opt/belimo-pulse/backend
+          printf '%s' "$BACKEND_ENV_FILE_B64" | base64 -d > /opt/belimo-pulse/backend/.env
+          echo "$GHCR_PULL_TOKEN" | sudo docker login ghcr.io -u beltromatti --password-stdin
+          sudo docker pull "$IMAGE"
+          sudo docker rm -f belimo-pulse-backend >/dev/null 2>&1 || true
+          sudo docker run -d \
+            --name belimo-pulse-backend \
+            --restart unless-stopped \
+            --env-file /opt/belimo-pulse/backend/.env \
+            -p 80:8080 \
+            "$IMAGE"
+          curl -fsS http://127.0.0.1/health >/dev/null
+          EOF
+
+      - name: Smoke test backend
+        env:
+          AWS_EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
+        run: |
+          set -euo pipefail
+          curl -fsS "http://${AWS_EC2_HOST}/health"
+
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    needs: deploy-backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Deploy frontend to Vercel
+        working-directory: ./frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          vercel build --prod --token="$VERCEL_TOKEN"
+          vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+
+      - name: Smoke test frontend bridge
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS \
+              -X POST \
+              -H 'Content-Type: application/json' \
+              -d '{"source":"github-actions","note":"frontend-bridge-smoke-test"}' \
+              "https://belimo-pulse.vercel.app/api/bridge/test"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
