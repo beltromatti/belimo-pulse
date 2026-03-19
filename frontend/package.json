@@ -2,11 +2,17 @@
   "name": "frontend",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9 <23"
+  },
   "scripts": {
-    "dev": "next dev --webpack",
+    "predev": "node ../scripts/check-node-version.mjs frontend",
+    "dev": "next dev",
+    "prebuild": "node ../scripts/check-node-version.mjs frontend",
     "build": "next build",
     "build:webpack": "next build --webpack",
     "postbuild": "node scripts/prepare-vercel-root.mjs",
+    "prestart": "node ../scripts/check-node-version.mjs frontend",
     "start": "next start",
     "lint": "eslint"
   },

@@ -1,15 +1,15 @@
 "use client";
 
 import {
-  Html,
   OrbitControls,
-  OrthographicCamera,
+} from "@react-three/drei/core/OrbitControls";
+import {
   RoundedBox,
-  Text,
-} from "@react-three/drei";
+} from "@react-three/drei/core/RoundedBox";
 import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import { Html } from "@react-three/drei/web/Html";
 
 import {
   BuildingBlueprint,
@@ -285,17 +285,16 @@ function RuntimeSceneContent({
       <fog attach="fog" args={["#d9e4ee", 18, 48]} />
       <ambientLight intensity={1.45} />
       <hemisphereLight intensity={1.25} color="#f8fafc" groundColor="#c8d4e0" />
-      <directionalLight castShadow position={[8, 18, 10]} intensity={2.1} shadow-mapSize-width={2048} shadow-mapSize-height={2048} />
-      <OrthographicCamera makeDefault position={[18, 18, 18]} zoom={34} near={0.1} far={200} />
+      <directionalLight position={[8, 18, 10]} intensity={2.1} />
       <OrbitControls enablePan={false} minPolarAngle={0.8} maxPolarAngle={1.08} minAzimuthAngle={-0.92} maxAzimuthAngle={-0.42} minZoom={28} maxZoom={48} />
 
       <group rotation={[-0.34, -0.72, -0.04]} position={[-11.5, 0, -6.2]}>
-        <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[11, -0.1, 5.6]}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[11, -0.1, 5.6]}>
           <planeGeometry args={[36, 26]} />
           <meshStandardMaterial color="#d3dde8" />
         </mesh>
 
-        <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[11.4, -0.05, 5.6]}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[11.4, -0.05, 5.6]}>
           <planeGeometry args={[28, 20]} />
           <meshStandardMaterial color="#eef3f7" transparent opacity={0.32} />
         </mesh>
@@ -341,8 +340,6 @@ function RuntimeSceneContent({
                 radius={0.08}
                 smoothness={4}
                 position={[center.x, 0, center.z]}
-                receiveShadow
-                castShadow
                 onClick={(event) => handleRoomClick(event, space.id)}
               >
                 <meshStandardMaterial color={getSpaceColor(zone)} metalness={0.06} roughness={0.88} />
@@ -353,7 +350,6 @@ function RuntimeSceneContent({
                 radius={0.02}
                 smoothness={2}
                 position={[center.x, 1.18, space.layout.origin_m.y]}
-                castShadow
               >
                 <meshStandardMaterial color="#f7f5f0" />
               </RoundedBox>
@@ -362,7 +358,6 @@ function RuntimeSceneContent({
                 radius={0.02}
                 smoothness={2}
                 position={[center.x, 1.18, space.layout.origin_m.y + space.layout.size_m.depth]}
-                castShadow
               >
                 <meshStandardMaterial color="#f7f5f0" />
               </RoundedBox>
@@ -371,7 +366,6 @@ function RuntimeSceneContent({
                 radius={0.02}
                 smoothness={2}
                 position={[space.layout.origin_m.x, 0.58, center.z]}
-                castShadow
               >
                 <meshStandardMaterial color="#f7f5f0" />
               </RoundedBox>
@@ -380,7 +374,6 @@ function RuntimeSceneContent({
                 radius={0.02}
                 smoothness={2}
                 position={[space.layout.origin_m.x + space.layout.size_m.width, 0.58, center.z]}
-                castShadow
               >
                 <meshStandardMaterial color="#f7f5f0" />
               </RoundedBox>
@@ -422,7 +415,7 @@ function RuntimeSceneContent({
                 intensity={Math.max(0.12, intensity * 0.85)}
               />
 
-              <Html position={[center.x, 1.55, center.z]} transform occlude distanceFactor={11}>
+              <Html position={[center.x, 1.55, center.z]} transform distanceFactor={11}>
                 <RoomBadge zone={zone} label={space.name} isSelected={isSelected} isWorstZone={isWorstZone} />
               </Html>
             </group>
@@ -435,7 +428,7 @@ function RuntimeSceneContent({
 
           return (
             <group key={device.id} position={[device.layout.position_m.x, y, device.layout.position_m.y]}>
-              <mesh castShadow>
+              <mesh>
                 <sphereGeometry args={[device.kind === "source_equipment" ? 0.14 : 0.08, 16, 16]} />
                 <meshStandardMaterial color={markerColor} emissive={markerColor} emissiveIntensity={0.45} />
               </mesh>
@@ -450,18 +443,16 @@ function RuntimeSceneContent({
           <meshStandardMaterial color="#f6d0bd" metalness={0.16} roughness={0.48} />
         </RoundedBox>
         <SourceFan position={sourcePoint} />
-        <Text position={[sourcePoint.x, 4.55, sourcePoint.z]} fontSize={0.36} color="#111827" anchorX="center" anchorY="middle">
-          RTU-1
-        </Text>
-        <Text
-          position={[sourcePoint.x, 4.2, sourcePoint.z + 1.12]}
-          fontSize={0.18}
-          color="#475569"
-          anchorX="center"
-          anchorY="middle"
-        >
-          {formatZoneToneLabel(mode)}
-        </Text>
+        <Html position={[sourcePoint.x, 4.5, sourcePoint.z]} transform distanceFactor={12}>
+          <div className="rounded-full border border-white/70 bg-white/92 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-800 shadow-[0_10px_24px_rgba(15,23,42,0.12)]">
+            RTU-1
+          </div>
+        </Html>
+        <Html position={[sourcePoint.x, 4.16, sourcePoint.z + 1.1]} transform distanceFactor={12}>
+          <div className="rounded-full border border-white/60 bg-white/88 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500 shadow-[0_8px_18px_rgba(15,23,42,0.08)]">
+            {formatZoneToneLabel(mode)}
+          </div>
+        </Html>
       </group>
     </>
   );
@@ -479,7 +470,12 @@ export function RuntimeScene(props: RuntimeSceneProps) {
         <span>Dollhouse HVAC Twin</span>
         <span>Ceiling supply ducts · live airflow</span>
       </div>
-      <Canvas shadows dpr={[1, 2]}>
+      <Canvas
+        orthographic
+        camera={{ position: [18, 18, 18], zoom: 34, near: 0.1, far: 200 }}
+        dpr={1}
+        gl={{ antialias: false, powerPreference: "high-performance" }}
+      >
         <RuntimeSceneContent {...props} />
       </Canvas>
     </div>
