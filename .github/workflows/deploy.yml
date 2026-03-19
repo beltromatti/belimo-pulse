@@ -120,10 +120,10 @@ jobs:
             set -a
             . /opt/belimo-pulse/postgres/postgres.env
             set +a
-            cat > /opt/belimo-pulse/backend/database.env <<ENVFILE
-DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@belimo-pulse-postgres:5432/${POSTGRES_DB}
-DATABASE_SSL=false
-ENVFILE
+            printf "DATABASE_URL=postgresql://%s:%s@belimo-pulse-postgres:5432/%s\nDATABASE_SSL=false\n" \
+              "$POSTGRES_USER" \
+              "$POSTGRES_PASSWORD" \
+              "$POSTGRES_DB" > /opt/belimo-pulse/backend/database.env
           '
           sudo chmod 600 /opt/belimo-pulse/backend/.env.base /opt/belimo-pulse/backend/database.env /opt/belimo-pulse/postgres/postgres.env
           sudo sh -c "grep -v -E '^(DATABASE_URL|DATABASE_SSL)=' /opt/belimo-pulse/backend/.env.base > /opt/belimo-pulse/backend/.env.runtime"
