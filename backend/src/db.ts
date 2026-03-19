@@ -1,6 +1,9 @@
 import { Pool } from "pg";
 
+import { BuildingBlueprint } from "./blueprint";
 import { env } from "./config";
+import { DeviceTelemetryRecord, TwinSnapshot } from "./runtime-types";
+import { WeatherSnapshot } from "./physics";
 
 const pool = new Pool({
   connectionString: env.DATABASE_URL,
@@ -14,7 +17,54 @@ export async function ensureDatabaseReady() {
       source TEXT NOT NULL,
       note TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
+    );
+
+    CREATE TABLE IF NOT EXISTS pulse_blueprints (
+      blueprint_id TEXT PRIMARY KEY,
+      source_type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      schema_version TEXT NOT NULL,
+      blueprint JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS pulse_weather_observations (
+      id BIGSERIAL PRIMARY KEY,
+      building_id TEXT NOT NULL,
+      observed_at TIMESTAMPTZ NOT NULL,
+      weather JSONB NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS pulse_weather_observations_lookup_idx
+      ON pulse_weather_observations (building_id, observed_at DESC);
+
+    CREATE TABLE IF NOT EXISTS pulse_device_observations (
+      id BIGSERIAL PRIMARY KEY,
+      building_id TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      observed_at TIMESTAMPTZ NOT NULL,
+      telemetry JSONB NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS pulse_device_observations_lookup_idx
+      ON pulse_device_observations (building_id, observed_at DESC, device_id);
+
+    CREATE TABLE IF NOT EXISTS pulse_twin_snapshots (
+      id BIGSERIAL PRIMARY KEY,
+      building_id TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      observed_at TIMESTAMPTZ NOT NULL,
+      summary JSONB NOT NULL,
+      weather JSONB NOT NULL,
+      zones JSONB NOT NULL,
+      devices JSONB NOT NULL,
+      derived JSONB NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS pulse_twin_snapshots_lookup_idx
+      ON pulse_twin_snapshots (building_id, observed_at DESC);
   `);
 }
 
@@ -49,6 +99,180 @@ export async function createHealthcheck(source: string, note: string) {
   );
 
   return result.rows[0];
+}
+
+export async function upsertBlueprintRecord(blueprint: BuildingBlueprint) {
+  await pool.query(
+    `
+      INSERT INTO pulse_blueprints (blueprint_id, source_type, name, schema_version, blueprint)
+      VALUES ($1, $2, $3, $4, $5::jsonb)
+      ON CONFLICT (blueprint_id) DO UPDATE
+      SET
+        source_type = EXCLUDED.source_type,
+        name = EXCLUDED.name,
+        schema_version = EXCLUDED.schema_version,
+        blueprint = EXCLUDED.blueprint,
+        updated_at = NOW()
+    `,
+    [
+      blueprint.blueprint_id,
+      blueprint.source_type,
+      blueprint.building.name,
+      blueprint.schema_version,
+      JSON.stringify(blueprint),
+    ],
+  );
+}
+
+export async function insertWeatherObservation(buildingId: string, observedAt: string, weather: WeatherSnapshot) {
+  await pool.query(
+    `
+      INSERT INTO pulse_weather_observations (building_id, observed_at, weather)
+      VALUES ($1, $2, $3::jsonb)
+    `,
+    [buildingId, observedAt, JSON.stringify(weather)],
+  );
+}
+
+export async function insertDeviceObservations(
+  buildingId: string,
+  observedAt: string,
+  sourceKind: "sandbox" | "real",
+  records: DeviceTelemetryRecord[],
+) {
+  if (records.length === 0) {
+    return;
+  }
+
+  const values: string[] = [];
+  const params: Array<string> = [];
+
+  records.forEach((record, index) => {
+    const offset = index * 6;
+    values.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}::jsonb)`);
+    params.push(
+      buildingId,
+      sourceKind,
+      record.deviceId,
+      record.productId,
+      observedAt,
+      JSON.stringify(record.telemetry),
+    );
+  });
+
+  await pool.query(
+    `
+      INSERT INTO pulse_device_observations (
+        building_id,
+        source_kind,
+        device_id,
+        product_id,
+        observed_at,
+        telemetry
+      )
+      VALUES ${values.join(", ")}
+    `,
+    params,
+  );
+}
+
+export async function insertTwinSnapshot(snapshot: TwinSnapshot) {
+  await pool.query(
+    `
+      INSERT INTO pulse_twin_snapshots (
+        building_id,
+        source_kind,
+        observed_at,
+        summary,
+        weather,
+        zones,
+        devices,
+        derived
+      )
+      VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb)
+    `,
+    [
+      snapshot.buildingId,
+      snapshot.sourceKind,
+      snapshot.observedAt,
+      JSON.stringify(snapshot.summary),
+      JSON.stringify(snapshot.weather),
+      JSON.stringify(snapshot.zones),
+      JSON.stringify(snapshot.devices),
+      JSON.stringify(snapshot.derived),
+    ],
+  );
+}
+
+export async function listRecentDeviceObservations(buildingId: string, limit: number) {
+  const result = await pool.query<{
+    device_id: string;
+    product_id: string;
+    observed_at: string;
+    telemetry: Record<string, unknown>;
+  }>(
+    `
+      SELECT
+        device_id,
+        product_id,
+        observed_at::TEXT,
+        telemetry
+      FROM pulse_device_observations
+      WHERE building_id = $1
+      ORDER BY observed_at DESC, id DESC
+      LIMIT $2
+    `,
+    [buildingId, limit],
+  );
+
+  return result.rows;
+}
+
+export async function getLatestTwinSnapshot(buildingId: string) {
+  const result = await pool.query<{
+    building_id: string;
+    source_kind: "sandbox" | "real";
+    observed_at: string;
+    summary: TwinSnapshot["summary"];
+    weather: TwinSnapshot["weather"];
+    zones: TwinSnapshot["zones"];
+    devices: TwinSnapshot["devices"];
+    derived: TwinSnapshot["derived"];
+  }>(
+    `
+      SELECT
+        building_id,
+        source_kind,
+        observed_at::TEXT,
+        summary,
+        weather,
+        zones,
+        devices,
+        derived
+      FROM pulse_twin_snapshots
+      WHERE building_id = $1
+      ORDER BY observed_at DESC, id DESC
+      LIMIT 1
+    `,
+    [buildingId],
+  );
+
+  const row = result.rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    buildingId: row.building_id,
+    sourceKind: row.source_kind,
+    observedAt: row.observed_at,
+    summary: row.summary,
+    weather: row.weather,
+    zones: row.zones,
+    devices: row.devices,
+    derived: row.derived,
+  } satisfies TwinSnapshot;
 }
 
 export async function closeDatabase() {

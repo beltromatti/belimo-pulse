@@ -1,0 +1,162 @@
+{
+  "schema_version": "2026-03-19",
+  "truth_version": "1.0.0",
+  "blueprint_id": "sandbox-office-v1",
+  "runtime": {
+    "simulation_timestep_s": 5,
+    "random_seed": 260319
+  },
+  "weather": {
+    "source": "open-meteo",
+    "fallback_temperature_c": 9,
+    "fallback_relative_humidity_pct": 68
+  },
+  "zone_truth": [
+    {
+      "zone_id": "lobby",
+      "effective_ua_w_per_k": 88,
+      "effective_thermal_capacitance_kj_per_k": 3600,
+      "effective_infiltration_ach": 0.7,
+      "solar_gain_scale": 0.55,
+      "occupancy_profile": {
+        "weekday_peak_fraction": 0.68,
+        "weekend_peak_fraction": 0.1,
+        "stochastic_variation_pct": 0.22
+      }
+    },
+    {
+      "zone_id": "open_office",
+      "effective_ua_w_per_k": 176,
+      "effective_thermal_capacitance_kj_per_k": 11800,
+      "effective_infiltration_ach": 0.35,
+      "solar_gain_scale": 0.48,
+      "occupancy_profile": {
+        "weekday_peak_fraction": 0.9,
+        "weekend_peak_fraction": 0.08,
+        "stochastic_variation_pct": 0.14
+      }
+    },
+    {
+      "zone_id": "meeting_room",
+      "effective_ua_w_per_k": 82,
+      "effective_thermal_capacitance_kj_per_k": 3200,
+      "effective_infiltration_ach": 0.4,
+      "solar_gain_scale": 0.42,
+      "occupancy_profile": {
+        "weekday_peak_fraction": 0.52,
+        "weekend_peak_fraction": 0.04,
+        "stochastic_variation_pct": 0.45
+      }
+    },
+    {
+      "zone_id": "facility_office",
+      "effective_ua_w_per_k": 62,
+      "effective_thermal_capacitance_kj_per_k": 2400,
+      "effective_infiltration_ach": 0.35,
+      "solar_gain_scale": 0.62,
+      "occupancy_profile": {
+        "weekday_peak_fraction": 0.7,
+        "weekend_peak_fraction": 0.05,
+        "stochastic_variation_pct": 0.3
+      }
+    }
+  ],
+  "equipment_truth": {
+    "source_equipment": {
+      "device_id": "rtu-1",
+      "cooling_capacity_kw": 26,
+      "heating_capacity_kw": 24,
+      "fan_static_coeff_pa": 1100,
+      "economizer_effectiveness": 0.92
+    },
+    "branch_flow_coefficients": [
+      {
+        "device_id": "zone-damper-lobby-1",
+        "flow_weight": 1
+      },
+      {
+        "device_id": "zone-damper-office-1",
+        "flow_weight": 1
+      },
+      {
+        "device_id": "zone-vav-meeting-1",
+        "flow_weight": 1
+      },
+      {
+        "device_id": "zone-damper-facility-1",
+        "flow_weight": 1
+      }
+    ],
+    "actuator_truth": [
+      {
+        "device_id": "oa-damper-1",
+        "max_rate_pct_per_s": 2,
+        "baseline_tracking_bias_pct": 0,
+        "baseline_torque_nmm": 160
+      },
+      {
+        "device_id": "ra-damper-1",
+        "max_rate_pct_per_s": 2,
+        "baseline_tracking_bias_pct": 0,
+        "baseline_torque_nmm": 160
+      },
+      {
+        "device_id": "ea-damper-1",
+        "max_rate_pct_per_s": 2,
+        "baseline_tracking_bias_pct": 0,
+        "baseline_torque_nmm": 160
+      },
+      {
+        "device_id": "zone-damper-lobby-1",
+        "max_rate_pct_per_s": 3.6,
+        "baseline_tracking_bias_pct": 0,
+        "baseline_torque_nmm": 0.7
+      },
+      {
+        "device_id": "zone-damper-office-1",
+        "max_rate_pct_per_s": 3.6,
+        "baseline_tracking_bias_pct": 0,
+        "baseline_torque_nmm": 0.7
+      },
+      {
+        "device_id": "zone-vav-meeting-1",
+        "max_rate_pct_per_s": 3,
+        "baseline_tracking_bias_pct": 0,
+        "baseline_torque_nmm": 120
+      },
+      {
+        "device_id": "zone-damper-facility-1",
+        "max_rate_pct_per_s": 3.6,
+        "baseline_tracking_bias_pct": 0,
+        "baseline_torque_nmm": 0.7
+      }
+    ],
+    "filter": {
+      "baseline_loading_factor": 0.04,
+      "natural_loading_hours_to_full_scale": 300
+    }
+  },
+  "sensor_noise": {
+    "temperature_c_sigma": 0.12,
+    "humidity_pct_sigma": 0.7,
+    "co2_ppm_sigma": 8,
+    "pressure_pa_sigma": 1.8,
+    "airflow_m3_h_sigma": 12
+  },
+  "fault_profiles": [
+    {
+      "id": "mouse-obstruction-open-office",
+      "device_id": "zone-damper-office-1",
+      "fault_type": "mechanical_obstruction_inside_damper_or_actuator",
+      "activation_runtime_s": 1200,
+      "severity": 0.62
+    },
+    {
+      "id": "progressive-filter-loading",
+      "device_id": "duct-static-1",
+      "fault_type": "filter_loading",
+      "activation_runtime_s": 2400,
+      "severity": 0.28
+    }
+  ]
+}

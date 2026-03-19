@@ -1,0 +1,913 @@
+{
+  "schema_version": "2026-03-19",
+  "blueprint_version": "2.0.0",
+  "blueprint_id": "sandbox-office-v1",
+  "source_type": "sandbox",
+  "building": {
+    "name": "Belimo Pulse Sandbox Office",
+    "timezone": "Europe/Zurich",
+    "location": {
+      "city": "St. Gallen",
+      "country": "Switzerland",
+      "latitude": 47.4245,
+      "longitude": 9.3767
+    },
+    "usage_type": "commercial_office",
+    "gross_floor_area_m2": 210,
+    "floor_count": 1,
+    "ceiling_plenum_height_m": 0.9
+  },
+  "design_basis": {
+    "reference_patterns": [
+      "Single-floor commercial office concept intentionally kept compact for hackathon execution speed.",
+      "Single-duct ceiling-distributed air system with rooftop source unit, mixed-air box, branch dampers, and one VAV terminal serving the conference room."
+    ],
+    "physics_model_intent": {
+      "zone_model": "well_mixed_single_zone_per_room",
+      "air_distribution_model": "single_duct_branch_distribution",
+      "digital_twin_goal": "Belimo engine must infer latent building and device behavior from blueprint plus telemetry, not from hidden sandbox truth."
+    }
+  },
+  "material_library": [
+    {
+      "id": "gypsum_board",
+      "name": "Gypsum board",
+      "category": "finish",
+      "thermal_conductivity_w_mk": 0.17,
+      "density_kg_m3": 800,
+      "specific_heat_j_kgk": 1090
+    },
+    {
+      "id": "mineral_wool",
+      "name": "Mineral wool insulation",
+      "category": "insulation",
+      "thermal_conductivity_w_mk": 0.04,
+      "density_kg_m3": 45,
+      "specific_heat_j_kgk": 840
+    },
+    {
+      "id": "reinforced_concrete",
+      "name": "Reinforced concrete",
+      "category": "structure",
+      "thermal_conductivity_w_mk": 1.7,
+      "density_kg_m3": 2400,
+      "specific_heat_j_kgk": 880
+    },
+    {
+      "id": "double_low_e_glazing",
+      "name": "Double low-e glazing",
+      "category": "fenestration",
+      "thermal_conductivity_w_mk": 0.96,
+      "density_kg_m3": 2500,
+      "specific_heat_j_kgk": 750
+    }
+  ],
+  "construction_library": [
+    {
+      "id": "ext_wall_light_office",
+      "name": "Insulated light office facade",
+      "type": "opaque_wall",
+      "nominal_u_value_w_m2k": 0.32,
+      "thermal_mass_class": "medium",
+      "layers": [
+        {
+          "material_id": "gypsum_board",
+          "thickness_m": 0.013
+        },
+        {
+          "material_id": "mineral_wool",
+          "thickness_m": 0.14
+        }
+      ]
+    },
+    {
+      "id": "roof_insulated_flat",
+      "name": "Insulated flat roof",
+      "type": "roof",
+      "nominal_u_value_w_m2k": 0.22,
+      "thermal_mass_class": "medium",
+      "layers": [
+        {
+          "material_id": "reinforced_concrete",
+          "thickness_m": 0.18
+        },
+        {
+          "material_id": "mineral_wool",
+          "thickness_m": 0.16
+        }
+      ]
+    },
+    {
+      "id": "slab_on_grade",
+      "name": "Ground slab",
+      "type": "floor",
+      "nominal_u_value_w_m2k": 0.28,
+      "thermal_mass_class": "heavy",
+      "layers": [
+        {
+          "material_id": "reinforced_concrete",
+          "thickness_m": 0.2
+        }
+      ]
+    },
+    {
+      "id": "office_glazing",
+      "name": "Commercial double glazing",
+      "type": "window",
+      "nominal_u_value_w_m2k": 1.5,
+      "solar_heat_gain_coefficient": 0.38,
+      "thermal_mass_class": "low",
+      "layers": [
+        {
+          "material_id": "double_low_e_glazing",
+          "thickness_m": 0.024
+        }
+      ]
+    }
+  ],
+  "floors": [
+    {
+      "id": "floor-1",
+      "name": "Ground Floor",
+      "elevation_m": 0,
+      "height_m": 3.3
+    }
+  ],
+  "spaces": [
+    {
+      "id": "lobby",
+      "floor_id": "floor-1",
+      "name": "Lobby",
+      "type": "reception",
+      "layout": {
+        "origin_m": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "size_m": {
+          "width": 6,
+          "depth": 4
+        }
+      },
+      "geometry": {
+        "area_m2": 24,
+        "height_m": 3.3,
+        "volume_m3": 79.2
+      },
+      "envelope": {
+        "opaque_surfaces": [
+          {
+            "surface_id": "lobby-north-wall",
+            "construction_id": "ext_wall_light_office",
+            "area_m2": 16,
+            "boundary": "outdoor",
+            "orientation_deg": 0
+          },
+          {
+            "surface_id": "lobby-west-wall",
+            "construction_id": "ext_wall_light_office",
+            "area_m2": 13.2,
+            "boundary": "outdoor",
+            "orientation_deg": 270
+          },
+          {
+            "surface_id": "lobby-roof",
+            "construction_id": "roof_insulated_flat",
+            "area_m2": 24,
+            "boundary": "outdoor",
+            "orientation_deg": 0
+          },
+          {
+            "surface_id": "lobby-slab",
+            "construction_id": "slab_on_grade",
+            "area_m2": 24,
+            "boundary": "ground",
+            "orientation_deg": 0
+          }
+        ],
+        "transparent_surfaces": [
+          {
+            "surface_id": "lobby-entry-glazing",
+            "construction_id": "office_glazing",
+            "area_m2": 8,
+            "boundary": "outdoor",
+            "orientation_deg": 0
+          }
+        ],
+        "infiltration_class": "entry_high"
+      },
+      "occupancy_design": {
+        "design_people": 8,
+        "co2_generation_lps_per_person": 0.0052,
+        "sensible_gain_w_per_person": 75,
+        "latent_gain_w_per_person": 45
+      },
+      "internal_load_design": {
+        "plug_w_per_m2": 4,
+        "lighting_w_per_m2": 6
+      },
+      "comfort_targets": {
+        "occupied_temperature_band_c": [
+          21.5,
+          24
+        ],
+        "unoccupied_temperature_band_c": [
+          18.5,
+          27
+        ],
+        "humidity_band_pct": [
+          35,
+          60
+        ],
+        "co2_limit_ppm": 950
+      }
+    },
+    {
+      "id": "open_office",
+      "floor_id": "floor-1",
+      "name": "Open Office",
+      "type": "office_open_plan",
+      "layout": {
+        "origin_m": {
+          "x": 6,
+          "y": 0,
+          "z": 0
+        },
+        "size_m": {
+          "width": 12,
+          "depth": 9
+        }
+      },
+      "geometry": {
+        "area_m2": 108,
+        "height_m": 3.3,
+        "volume_m3": 356.4
+      },
+      "envelope": {
+        "opaque_surfaces": [
+          {
+            "surface_id": "office-east-wall",
+            "construction_id": "ext_wall_light_office",
+            "area_m2": 29.7,
+            "boundary": "outdoor",
+            "orientation_deg": 90
+          },
+          {
+            "surface_id": "office-south-wall",
+            "construction_id": "ext_wall_light_office",
+            "area_m2": 39.6,
+            "boundary": "outdoor",
+            "orientation_deg": 180
+          },
+          {
+            "surface_id": "office-roof",
+            "construction_id": "roof_insulated_flat",
+            "area_m2": 108,
+            "boundary": "outdoor",
+            "orientation_deg": 0
+          },
+          {
+            "surface_id": "office-slab",
+            "construction_id": "slab_on_grade",
+            "area_m2": 108,
+            "boundary": "ground",
+            "orientation_deg": 0
+          }
+        ],
+        "transparent_surfaces": [
+          {
+            "surface_id": "office-east-glazing",
+            "construction_id": "office_glazing",
+            "area_m2": 10,
+            "boundary": "outdoor",
+            "orientation_deg": 90
+          },
+          {
+            "surface_id": "office-south-glazing",
+            "construction_id": "office_glazing",
+            "area_m2": 8,
+            "boundary": "outdoor",
+            "orientation_deg": 180
+          }
+        ],
+        "infiltration_class": "office_standard"
+      },
+      "occupancy_design": {
+        "design_people": 24,
+        "co2_generation_lps_per_person": 0.0052,
+        "sensible_gain_w_per_person": 75,
+        "latent_gain_w_per_person": 45
+      },
+      "internal_load_design": {
+        "plug_w_per_m2": 10,
+        "lighting_w_per_m2": 8
+      },
+      "comfort_targets": {
+        "occupied_temperature_band_c": [
+          21.5,
+          24
+        ],
+        "unoccupied_temperature_band_c": [
+          18,
+          27
+        ],
+        "humidity_band_pct": [
+          35,
+          60
+        ],
+        "co2_limit_ppm": 900
+      }
+    },
+    {
+      "id": "meeting_room",
+      "floor_id": "floor-1",
+      "name": "Meeting Room",
+      "type": "conference",
+      "layout": {
+        "origin_m": {
+          "x": 0,
+          "y": 4,
+          "z": 0
+        },
+        "size_m": {
+          "width": 6.8,
+          "depth": 5
+        }
+      },
+      "geometry": {
+        "area_m2": 34,
+        "height_m": 3.3,
+        "volume_m3": 112.2
+      },
+      "envelope": {
+        "opaque_surfaces": [
+          {
+            "surface_id": "meeting-west-wall",
+            "construction_id": "ext_wall_light_office",
+            "area_m2": 16.5,
+            "boundary": "outdoor",
+            "orientation_deg": 270
+          },
+          {
+            "surface_id": "meeting-roof",
+            "construction_id": "roof_insulated_flat",
+            "area_m2": 34,
+            "boundary": "outdoor",
+            "orientation_deg": 0
+          },
+          {
+            "surface_id": "meeting-slab",
+            "construction_id": "slab_on_grade",
+            "area_m2": 34,
+            "boundary": "ground",
+            "orientation_deg": 0
+          }
+        ],
+        "transparent_surfaces": [
+          {
+            "surface_id": "meeting-west-glazing",
+            "construction_id": "office_glazing",
+            "area_m2": 6,
+            "boundary": "outdoor",
+            "orientation_deg": 270
+          }
+        ],
+        "infiltration_class": "office_standard"
+      },
+      "occupancy_design": {
+        "design_people": 12,
+        "co2_generation_lps_per_person": 0.0052,
+        "sensible_gain_w_per_person": 80,
+        "latent_gain_w_per_person": 50
+      },
+      "internal_load_design": {
+        "plug_w_per_m2": 7,
+        "lighting_w_per_m2": 8
+      },
+      "comfort_targets": {
+        "occupied_temperature_band_c": [
+          21,
+          23.5
+        ],
+        "unoccupied_temperature_band_c": [
+          18,
+          27
+        ],
+        "humidity_band_pct": [
+          35,
+          60
+        ],
+        "co2_limit_ppm": 850
+      }
+    },
+    {
+      "id": "facility_office",
+      "floor_id": "floor-1",
+      "name": "Facility Office",
+      "type": "private_office",
+      "layout": {
+        "origin_m": {
+          "x": 18,
+          "y": 0,
+          "z": 0
+        },
+        "size_m": {
+          "width": 4.5,
+          "depth": 4
+        }
+      },
+      "geometry": {
+        "area_m2": 18,
+        "height_m": 3.3,
+        "volume_m3": 59.4
+      },
+      "envelope": {
+        "opaque_surfaces": [
+          {
+            "surface_id": "facility-east-wall",
+            "construction_id": "ext_wall_light_office",
+            "area_m2": 13.2,
+            "boundary": "outdoor",
+            "orientation_deg": 90
+          },
+          {
+            "surface_id": "facility-south-wall",
+            "construction_id": "ext_wall_light_office",
+            "area_m2": 14.85,
+            "boundary": "outdoor",
+            "orientation_deg": 180
+          },
+          {
+            "surface_id": "facility-roof",
+            "construction_id": "roof_insulated_flat",
+            "area_m2": 18,
+            "boundary": "outdoor",
+            "orientation_deg": 0
+          },
+          {
+            "surface_id": "facility-slab",
+            "construction_id": "slab_on_grade",
+            "area_m2": 18,
+            "boundary": "ground",
+            "orientation_deg": 0
+          }
+        ],
+        "transparent_surfaces": [
+          {
+            "surface_id": "facility-south-glazing",
+            "construction_id": "office_glazing",
+            "area_m2": 5,
+            "boundary": "outdoor",
+            "orientation_deg": 180
+          }
+        ],
+        "infiltration_class": "office_standard"
+      },
+      "occupancy_design": {
+        "design_people": 3,
+        "co2_generation_lps_per_person": 0.0052,
+        "sensible_gain_w_per_person": 75,
+        "latent_gain_w_per_person": 45
+      },
+      "internal_load_design": {
+        "plug_w_per_m2": 10,
+        "lighting_w_per_m2": 7
+      },
+      "comfort_targets": {
+        "occupied_temperature_band_c": [
+          21.5,
+          24
+        ],
+        "unoccupied_temperature_band_c": [
+          18,
+          27
+        ],
+        "humidity_band_pct": [
+          35,
+          60
+        ],
+        "co2_limit_ppm": 900
+      }
+    }
+  ],
+  "devices": [
+    {
+      "id": "rtu-1",
+      "product_id": "non_belimo_daikin_rebel_dps_rooftop_heat_pump",
+      "kind": "source_equipment",
+      "placement": "roof",
+      "served_space_ids": [
+        "lobby",
+        "open_office",
+        "meeting_room",
+        "facility_office"
+      ],
+      "layout": {
+        "position_m": {
+          "x": 10,
+          "y": 5,
+          "z": 4.8
+        }
+      },
+      "design": {
+        "design_supply_airflow_m3_h": 4000,
+        "design_supply_static_pa": 420,
+        "design_supply_air_temperature_c": 14.5,
+        "minimum_outdoor_air_fraction": 0.18,
+        "maximum_outdoor_air_fraction": 1
+      }
+    },
+    {
+      "id": "oa-damper-1",
+      "product_id": "belimo_nm24a_mod_air_damper_actuator",
+      "kind": "actuator",
+      "placement": "mixing_box_outdoor_air",
+      "served_space_ids": [],
+      "layout": {
+        "position_m": {
+          "x": 10,
+          "y": 5,
+          "z": 4.6
+        }
+      },
+      "design": {
+        "nominal_full_open_kv": 1
+      }
+    },
+    {
+      "id": "ra-damper-1",
+      "product_id": "belimo_nm24a_mod_air_damper_actuator",
+      "kind": "actuator",
+      "placement": "mixing_box_return_air",
+      "served_space_ids": [],
+      "layout": {
+        "position_m": {
+          "x": 9.6,
+          "y": 5,
+          "z": 4.6
+        }
+      },
+      "design": {
+        "nominal_full_open_kv": 1
+      }
+    },
+    {
+      "id": "ea-damper-1",
+      "product_id": "belimo_nm24a_mod_air_damper_actuator",
+      "kind": "actuator",
+      "placement": "exhaust_air_discharge",
+      "served_space_ids": [],
+      "layout": {
+        "position_m": {
+          "x": 10.4,
+          "y": 5,
+          "z": 4.6
+        }
+      },
+      "design": {
+        "nominal_full_open_kv": 1
+      }
+    },
+    {
+      "id": "mixed-air-temp-1",
+      "product_id": "belimo_22dt_12r_duct_temperature_sensor",
+      "kind": "sensor",
+      "placement": "mixed_air_section",
+      "served_space_ids": [],
+      "layout": {
+        "position_m": {
+          "x": 10,
+          "y": 5.3,
+          "z": 4.4
+        }
+      },
+      "design": {}
+    },
+    {
+      "id": "supply-air-temp-1",
+      "product_id": "belimo_22dt_12r_duct_temperature_sensor",
+      "kind": "sensor",
+      "placement": "main_supply_trunk",
+      "served_space_ids": [],
+      "layout": {
+        "position_m": {
+          "x": 10,
+          "y": 5.8,
+          "z": 4.1
+        }
+      },
+      "design": {}
+    },
+    {
+      "id": "supply-air-humidity-1",
+      "product_id": "belimo_22dth_15m_duct_humidity_temperature_sensor",
+      "kind": "sensor",
+      "placement": "main_supply_trunk",
+      "served_space_ids": [],
+      "layout": {
+        "position_m": {
+          "x": 10.2,
+          "y": 5.8,
+          "z": 4.1
+        }
+      },
+      "design": {}
+    },
+    {
+      "id": "duct-static-1",
+      "product_id": "belimo_22adp_154k_differential_pressure_sensor",
+      "kind": "sensor",
+      "placement": "main_supply_trunk",
+      "served_space_ids": [],
+      "layout": {
+        "position_m": {
+          "x": 9.8,
+          "y": 5.8,
+          "z": 4.1
+        }
+      },
+      "design": {}
+    },
+    {
+      "id": "zone-damper-lobby-1",
+      "product_id": "belimo_lm_series_sample_air_damper_actuator",
+      "kind": "actuator",
+      "placement": "branch_lobby",
+      "served_space_ids": [
+        "lobby"
+      ],
+      "layout": {
+        "position_m": {
+          "x": 3,
+          "y": 2,
+          "z": 3
+        }
+      },
+      "design": {
+        "design_airflow_m3_h": 450
+      }
+    },
+    {
+      "id": "zone-damper-office-1",
+      "product_id": "belimo_lm_series_sample_air_damper_actuator",
+      "kind": "actuator",
+      "placement": "branch_open_office",
+      "served_space_ids": [
+        "open_office"
+      ],
+      "layout": {
+        "position_m": {
+          "x": 12,
+          "y": 4,
+          "z": 3
+        }
+      },
+      "design": {
+        "design_airflow_m3_h": 2100
+      }
+    },
+    {
+      "id": "zone-vav-meeting-1",
+      "product_id": "belimo_nmv_d3_mp_vav_compact",
+      "kind": "actuator",
+      "placement": "branch_meeting_room",
+      "served_space_ids": [
+        "meeting_room"
+      ],
+      "layout": {
+        "position_m": {
+          "x": 3.2,
+          "y": 6.2,
+          "z": 3
+        }
+      },
+      "design": {
+        "design_airflow_m3_h": 950,
+        "minimum_airflow_m3_h": 180
+      }
+    },
+    {
+      "id": "zone-damper-facility-1",
+      "product_id": "belimo_lm_series_sample_air_damper_actuator",
+      "kind": "actuator",
+      "placement": "branch_facility_office",
+      "served_space_ids": [
+        "facility_office"
+      ],
+      "layout": {
+        "position_m": {
+          "x": 20,
+          "y": 2,
+          "z": 3
+        }
+      },
+      "design": {
+        "design_airflow_m3_h": 500
+      }
+    },
+    {
+      "id": "room-sensor-lobby-1",
+      "product_id": "belimo_22rtm_5u00a_room_iaq_sensor",
+      "kind": "sensor",
+      "placement": "lobby_wall",
+      "served_space_ids": [
+        "lobby"
+      ],
+      "layout": {
+        "position_m": {
+          "x": 1.2,
+          "y": 1.8,
+          "z": 1.5
+        }
+      },
+      "design": {}
+    },
+    {
+      "id": "room-sensor-office-1",
+      "product_id": "belimo_22rtm_5u00a_room_iaq_sensor",
+      "kind": "sensor",
+      "placement": "open_office_wall",
+      "served_space_ids": [
+        "open_office"
+      ],
+      "layout": {
+        "position_m": {
+          "x": 9,
+          "y": 4.5,
+          "z": 1.5
+        }
+      },
+      "design": {}
+    },
+    {
+      "id": "room-sensor-meeting-1",
+      "product_id": "belimo_22rtm_5u00a_room_iaq_sensor",
+      "kind": "sensor",
+      "placement": "meeting_room_wall",
+      "served_space_ids": [
+        "meeting_room"
+      ],
+      "layout": {
+        "position_m": {
+          "x": 2.4,
+          "y": 6.4,
+          "z": 1.5
+        }
+      },
+      "design": {}
+    },
+    {
+      "id": "room-sensor-facility-1",
+      "product_id": "belimo_22rtm_5u00a_room_iaq_sensor",
+      "kind": "sensor",
+      "placement": "facility_office_wall",
+      "served_space_ids": [
+        "facility_office"
+      ],
+      "layout": {
+        "position_m": {
+          "x": 19.2,
+          "y": 1.8,
+          "z": 1.5
+        }
+      },
+      "design": {}
+    }
+  ],
+  "systems": {
+    "air_loops": [
+      {
+        "id": "ahu-loop-1",
+        "type": "single_duct_mixed_air",
+        "source_equipment_id": "rtu-1",
+        "node_ids": [
+          "oa-intake",
+          "ra-plenum",
+          "mixing-box",
+          "conditioning-section",
+          "supply-trunk",
+          "branch-lobby",
+          "branch-office",
+          "branch-meeting",
+          "branch-facility",
+          "return-plenum",
+          "exhaust"
+        ],
+        "edges": [
+          {
+            "id": "edge-oa",
+            "from_node_id": "oa-intake",
+            "to_node_id": "mixing-box",
+            "component_id": "oa-damper-1",
+            "medium": "air",
+            "type": "controlled_damper"
+          },
+          {
+            "id": "edge-ra",
+            "from_node_id": "ra-plenum",
+            "to_node_id": "mixing-box",
+            "component_id": "ra-damper-1",
+            "medium": "air",
+            "type": "controlled_damper"
+          },
+          {
+            "id": "edge-mix",
+            "from_node_id": "mixing-box",
+            "to_node_id": "conditioning-section",
+            "component_id": "mixed-air-temp-1",
+            "medium": "air",
+            "type": "sensor_span"
+          },
+          {
+            "id": "edge-condition",
+            "from_node_id": "conditioning-section",
+            "to_node_id": "supply-trunk",
+            "component_id": "supply-air-temp-1",
+            "medium": "air",
+            "type": "conditioning_and_sensor_span"
+          },
+          {
+            "id": "edge-static",
+            "from_node_id": "conditioning-section",
+            "to_node_id": "supply-trunk",
+            "component_id": "duct-static-1",
+            "medium": "air",
+            "type": "pressure_sensor_span"
+          },
+          {
+            "id": "edge-lobby",
+            "from_node_id": "supply-trunk",
+            "to_node_id": "branch-lobby",
+            "component_id": "zone-damper-lobby-1",
+            "medium": "air",
+            "type": "zone_branch"
+          },
+          {
+            "id": "edge-office",
+            "from_node_id": "supply-trunk",
+            "to_node_id": "branch-office",
+            "component_id": "zone-damper-office-1",
+            "medium": "air",
+            "type": "zone_branch"
+          },
+          {
+            "id": "edge-meeting",
+            "from_node_id": "supply-trunk",
+            "to_node_id": "branch-meeting",
+            "component_id": "zone-vav-meeting-1",
+            "medium": "air",
+            "type": "zone_branch_vav"
+          },
+          {
+            "id": "edge-facility",
+            "from_node_id": "supply-trunk",
+            "to_node_id": "branch-facility",
+            "component_id": "zone-damper-facility-1",
+            "medium": "air",
+            "type": "zone_branch"
+          },
+          {
+            "id": "edge-return",
+            "from_node_id": "return-plenum",
+            "to_node_id": "ra-plenum",
+            "component_id": "ea-damper-1",
+            "medium": "air",
+            "type": "return_and_exhaust_interface"
+          }
+        ]
+      }
+    ]
+  },
+  "control_profiles": {
+    "occupancy_design": {
+      "weekday_start_hour": 7.5,
+      "weekday_peak_hour": 11,
+      "weekday_end_hour": 18.5,
+      "weekend_design_multiplier": 0.15
+    },
+    "air_loop_design": {
+      "supply_air_temperature_reset_c": [
+        13.5,
+        18.5
+      ],
+      "supply_fan_speed_pct": [
+        32,
+        92
+      ],
+      "economizer_lockout_temperature_c": 18
+    }
+  },
+  "identification_targets": {
+    "building_parameters": [
+      "effective_ua_w_per_k",
+      "effective_thermal_capacitance_kj_per_k",
+      "effective_infiltration_ach"
+    ],
+    "device_parameters": [
+      "branch_flow_coefficient",
+      "actuator_tracking_gain",
+      "filter_resistance_factor"
+    ]
+  }
+}
