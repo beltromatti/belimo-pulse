@@ -13,54 +13,34 @@ import {
   computeZoneRhStep,
   computeZoneTemperatureStep,
   createSeededRng,
-  gaussianNoise,
+  humidityRatioFromRh,
   lerp,
+  relativeHumidityFromHumidityRatio,
   round,
   smoothStep,
   solarGainMultiplier,
 } from "../physics";
 import {
-  DeviceTelemetryRecord,
   RuntimeControlInput,
   RuntimeControlState,
   RuntimeFaultDescriptor,
   SandboxTickResult,
-  ZoneTwinState,
 } from "../runtime-types";
 import { SandboxTruth } from "../sandbox-truth";
+import {
+  MutableZoneTruth,
+  SandboxActuatorState,
+  SandboxRuntimeFault,
+  SandboxRuntimeState,
+  SandboxSourceMode,
+} from "./model";
+import {
+  buildDeviceTelemetryRecord,
+  computeZoneActuatorCommand,
+  createInitialActuatorState,
+  stepActuatorBehavior,
+} from "./product-behaviors";
 import { OpenMeteoWeatherService } from "./weather";
-
-type MutableZoneTruth = ZoneTwinState;
-
-type ActuatorTruth = {
-  commandPct: number;
-  feedbackPct: number;
-  rotationDirection: 0 | 1 | 2;
-  torqueNmm: number;
-  powerW: number;
-  bodyTemperatureC: number;
-};
-
-type RuntimeFault = {
-  id: string;
-  deviceId: string;
-  faultType: string;
-  severity: number;
-  active: boolean;
-};
-
-type RuntimeState = {
-  runtimeSeconds: number;
-  zones: Map<string, MutableZoneTruth>;
-  actuators: Map<string, ActuatorTruth>;
-  filterLoadingFactor: number;
-  sourceMode: "off" | "ventilation" | "cooling" | "heating" | "economizer";
-  supplyFanSpeedPct: number;
-  outdoorAirFraction: number;
-  mixedAirTemperatureC: number;
-  supplyTemperatureC: number;
-  supplyRelativeHumidityPct: number;
-};
 
 export class SandboxDataGenerationEngine {
   private readonly random: () => number;
@@ -71,9 +51,9 @@ export class SandboxDataGenerationEngine {
 
   private readonly productById: Map<string, ProductDefinition>;
 
-  private readonly runtimeState: RuntimeState;
+  private readonly runtimeState: SandboxRuntimeState;
 
-  private readonly runtimeFaults: RuntimeFault[];
+  private readonly runtimeFaults: SandboxRuntimeFault[];
 
   private readonly controlState: RuntimeControlState;
 
@@ -164,34 +144,57 @@ export class SandboxDataGenerationEngine {
     this.runtimeState.filterLoadingFactor = computeFilterLoading(
       this.runtimeState.runtimeSeconds / 3600,
       this.getFaultSeverity("filter_loading"),
+      this.sandboxTruth.equipment_truth.filter.natural_loading_hours_to_full_scale,
     );
 
     const returnTemperatureC = this.averageOfZones("temperatureC");
     const returnRhPct = this.averageOfZones("relativeHumidityPct");
+    const returnCo2Ppm = this.averageOfZones("co2Ppm");
     this.runtimeState.mixedAirTemperatureC = computeMixedAirTemperature(
       weather.temperatureC,
       returnTemperatureC,
       this.runtimeState.outdoorAirFraction,
     );
     const mixedAirRhPct = computeMixedRelativeHumidity(
+      weather.temperatureC,
       weather.relativeHumidityPct,
+      returnTemperatureC,
       returnRhPct,
+      this.runtimeState.mixedAirTemperatureC,
       this.runtimeState.outdoorAirFraction,
+    );
+
+    const designTotalAirflowM3H = this.getSourceDevice().design.design_supply_airflow_m3_h ?? 4000;
+    const expectedTotalFlowM3H = designTotalAirflowM3H * clamp(this.runtimeState.supplyFanSpeedPct / 100, 0.2, 1.1);
+    const achievableSupplyTemperatureC = this.computeAchievableSupplyTemperature(
+      controls.sourceMode,
+      controls.supplyTemperatureSetpointC,
+      this.runtimeState.mixedAirTemperatureC,
+      weather.temperatureC,
+      expectedTotalFlowM3H,
     );
 
     this.runtimeState.supplyTemperatureC = smoothStep(
       this.runtimeState.supplyTemperatureC,
-      controls.supplyTemperatureSetpointC,
+      achievableSupplyTemperatureC,
       dtSeconds * 0.16,
     );
     this.runtimeState.supplyRelativeHumidityPct = clamp(
       smoothStep(
         this.runtimeState.supplyRelativeHumidityPct,
-        controls.sourceMode === "cooling" ? Math.min(mixedAirRhPct, 52) : mixedAirRhPct,
+        this.computeSupplyRelativeHumidityPct(
+          controls.sourceMode,
+          this.runtimeState.mixedAirTemperatureC,
+          mixedAirRhPct,
+          this.runtimeState.supplyTemperatureC,
+        ),
         dtSeconds * 0.5,
       ),
-      20,
-      80,
+      15,
+      98,
+    );
+    this.runtimeState.supplyCo2Ppm = round(
+      OUTDOOR_CO2_PPM * this.runtimeState.outdoorAirFraction + returnCo2Ppm * (1 - this.runtimeState.outdoorAirFraction),
     );
 
     const branchFlows = this.computeBranchAirflows();
@@ -216,13 +219,7 @@ export class SandboxDataGenerationEngine {
     }));
 
     const observedAt = now.toISOString();
-    const deviceReadings = this.buildDeviceReadings(
-      observedAt,
-      weather,
-      branchFlows,
-      staticPressurePa,
-      mixedAirRhPct,
-    );
+    const deviceReadings = this.buildDeviceReadings(observedAt, weather, branchFlows, staticPressurePa);
 
     return {
       buildingId: this.blueprint.blueprint_id,
@@ -246,9 +243,9 @@ export class SandboxDataGenerationEngine {
     };
   }
 
-  private createInitialRuntimeState(): RuntimeState {
+  private createInitialRuntimeState(): SandboxRuntimeState {
     const zones = new Map<string, MutableZoneTruth>();
-    const actuators = new Map<string, ActuatorTruth>();
+    const actuators = new Map<string, SandboxActuatorState>();
 
     for (const space of this.blueprint.spaces) {
       zones.set(space.id, {
@@ -264,15 +261,7 @@ export class SandboxDataGenerationEngine {
     }
 
     for (const device of this.blueprint.devices.filter((candidate) => candidate.kind === "actuator")) {
-      const truth = this.getActuatorTruth(device.id);
-      actuators.set(device.id, {
-        commandPct: 42,
-        feedbackPct: 42,
-        rotationDirection: 0,
-        torqueNmm: truth.baseline_torque_nmm,
-        powerW: device.product_id === "belimo_lm_series_sample_air_damper_actuator" ? 0.003 : 0.18,
-        bodyTemperatureC: 29,
-      });
+      actuators.set(device.id, createInitialActuatorState(device));
     }
 
     return {
@@ -286,6 +275,7 @@ export class SandboxDataGenerationEngine {
       mixedAirTemperatureC: 20,
       supplyTemperatureC: 18,
       supplyRelativeHumidityPct: 45,
+      supplyCo2Ppm: OUTDOOR_CO2_PPM,
     };
   }
 
@@ -335,7 +325,8 @@ export class SandboxDataGenerationEngine {
       const targetMidpoint = (targetBand[0] + targetBand[1]) / 2 + this.getZoneTemperatureOffset(space.id);
       const tempError = truth.temperatureC - targetMidpoint;
       const co2Demand = Math.max(0, (truth.co2Ppm - space.comfort_targets.co2_limit_ppm) / 200);
-      demandByZone[space.id] = clamp(0.5 + tempError * 0.18 + co2Demand, 0.15, 1.15);
+      const occupancyFloor = occupied ? 0.28 : 0.12;
+      demandByZone[space.id] = clamp(occupancyFloor + Math.abs(tempError) * 0.22 + co2Demand, 0.15, 1.15);
     }
 
     return demandByZone;
@@ -349,19 +340,37 @@ export class SandboxDataGenerationEngine {
     const satRange = this.blueprint.control_profiles.air_loop_design.supply_air_temperature_reset_c;
     const supplyFanSpeedPct = clamp(fanRange[0] + maxDemand * (fanRange[1] - fanRange[0]), fanRange[0], fanRange[1]);
     const averageZoneTemp = this.averageOfZones("temperatureC");
+    let maxWarmErrorC = 0;
+    let maxColdErrorC = 0;
 
-    let sourceMode: RuntimeState["sourceMode"] = "ventilation";
+    for (const space of this.blueprint.spaces) {
+      const zone = this.runtimeState.zones.get(space.id);
+
+      if (!zone) {
+        continue;
+      }
+
+      const occupied = zone.occupancyCount > 0;
+      const targetBand = occupied ? space.comfort_targets.occupied_temperature_band_c : space.comfort_targets.unoccupied_temperature_band_c;
+      const targetMidpoint = (targetBand[0] + targetBand[1]) / 2 + this.getZoneTemperatureOffset(space.id);
+      maxWarmErrorC = Math.max(maxWarmErrorC, zone.temperatureC - targetMidpoint);
+      maxColdErrorC = Math.max(maxColdErrorC, targetMidpoint - zone.temperatureC);
+    }
+
+    let sourceMode: SandboxSourceMode = "ventilation";
     let supplyTemperatureSetpointC = satRange[1];
 
-    if (this.controlState.sourceModePreference === "cooling" || averageZoneTemp > 23.4) {
+    if (this.controlState.sourceModePreference === "cooling" || maxWarmErrorC > 0.45 || averageZoneTemp > 23.4) {
       sourceMode = "cooling";
-      supplyTemperatureSetpointC = lerp(satRange[1], satRange[0], clamp((averageZoneTemp - 23.4) / 3, 0, 1));
-    } else if (this.controlState.sourceModePreference === "heating" || averageZoneTemp < 21.2 || outdoorTemperatureC < 8) {
+      supplyTemperatureSetpointC = lerp(satRange[1], satRange[0], clamp(maxWarmErrorC / 3, 0, 1));
+    } else if (this.controlState.sourceModePreference === "heating" || maxColdErrorC > 0.35 || outdoorTemperatureC < 8) {
       sourceMode = "heating";
-      supplyTemperatureSetpointC = lerp(19, 31, clamp((21.2 - averageZoneTemp) / 4, 0, 1));
+      supplyTemperatureSetpointC = lerp(22, 31, clamp(maxColdErrorC / 4, 0, 1));
     } else if (
       this.controlState.sourceModePreference === "economizer" ||
-      (outdoorTemperatureC < this.blueprint.control_profiles.air_loop_design.economizer_lockout_temperature_c && occupiedZones > 0)
+      (outdoorTemperatureC < this.blueprint.control_profiles.air_loop_design.economizer_lockout_temperature_c &&
+        occupiedZones > 0 &&
+        maxWarmErrorC > 0.2)
     ) {
       sourceMode = "economizer";
       supplyTemperatureSetpointC = 16.5;
@@ -397,12 +406,7 @@ export class SandboxDataGenerationEngine {
         continue;
       }
 
-      if (device.product_id === "belimo_nmv_d3_mp_vav_compact") {
-        commands[device.id] = clamp(28 + zoneDemand[servedZoneId] * 62, 20, 95);
-        continue;
-      }
-
-      commands[device.id] = clamp(24 + zoneDemand[servedZoneId] * 68, 18, 98);
+      commands[device.id] = computeZoneActuatorCommand(device.product_id, zoneDemand[servedZoneId]);
     }
 
     return commands;
@@ -410,32 +414,28 @@ export class SandboxDataGenerationEngine {
 
   private applyActuatorDynamics(commands: Record<string, number>, dtSeconds: number) {
     for (const [deviceId, actuator] of this.runtimeState.actuators.entries()) {
-      const target = commands[deviceId] ?? actuator.commandPct;
-      const truth = this.getActuatorTruth(deviceId);
-      actuator.commandPct = target;
-      let movementLimit = truth.max_rate_pct_per_s * dtSeconds;
+      const device = this.deviceById.get(deviceId);
 
-      if (this.isFaultActive(deviceId, "mechanical_obstruction_inside_damper_or_actuator")) {
-        movementLimit *= 0.28;
+      if (!device) {
+        continue;
       }
 
-      const biasedTarget = target + truth.baseline_tracking_bias_pct;
-      const nextFeedback = smoothStep(actuator.feedbackPct, biasedTarget, movementLimit);
-      actuator.rotationDirection = nextFeedback === actuator.feedbackPct ? 0 : nextFeedback > actuator.feedbackPct ? 1 : 2;
-      actuator.feedbackPct = nextFeedback;
-
-      const branchLoadFactor = clamp(Math.abs(target - nextFeedback) / 30, 0, 1);
-      const obstruction = this.isFaultActive(deviceId, "mechanical_obstruction_inside_damper_or_actuator")
-        ? this.getFaultSeverity("mechanical_obstruction_inside_damper_or_actuator", deviceId) * 3.2
+      const target = commands[deviceId] ?? actuator.commandPct;
+      const truth = this.getActuatorTruth(deviceId);
+      const obstructionSeverity = this.isFaultActive(deviceId, "mechanical_obstruction_inside_damper_or_actuator")
+        ? this.getFaultSeverity("mechanical_obstruction_inside_damper_or_actuator", deviceId)
         : 0;
-      const isSampleLike = this.deviceById.get(deviceId)?.product_id === "belimo_lm_series_sample_air_damper_actuator";
-      actuator.torqueNmm = isSampleLike
-        ? round(truth.baseline_torque_nmm + branchLoadFactor * 0.9 + obstruction * 2.2, 2)
-        : round(truth.baseline_torque_nmm + branchLoadFactor * 190 + obstruction * 180, 1);
-      actuator.powerW = isSampleLike
-        ? round(0.002 + branchLoadFactor * 0.04 + obstruction * 0.02, 3)
-        : round(0.18 + branchLoadFactor * 0.16 + obstruction * 0.08, 3);
-      actuator.bodyTemperatureC = round(lerp(actuator.bodyTemperatureC, 29 + actuator.powerW * 18, 0.16));
+      this.runtimeState.actuators.set(
+        deviceId,
+        stepActuatorBehavior({
+          device,
+          current: actuator,
+          targetPct: target,
+          dtSeconds,
+          truth,
+          obstructionSeverity,
+        }),
+      );
     }
   }
 
@@ -522,6 +522,7 @@ export class SandboxDataGenerationEngine {
         zoneVolumeM3: space.geometry.volume_m3,
         zoneCo2Ppm: zone.co2Ppm,
         outdoorCo2Ppm: OUTDOOR_CO2_PPM,
+        supplyCo2Ppm: this.runtimeState.supplyCo2Ppm,
         supplyAirflowM3H,
         infiltrationAch,
         occupancyCount,
@@ -529,6 +530,9 @@ export class SandboxDataGenerationEngine {
       });
       zone.relativeHumidityPct = computeZoneRhStep({
         dtSeconds,
+        zoneTemperatureC: zone.temperatureC,
+        outdoorTemperatureC: weather.temperatureC,
+        supplyTemperatureC: this.runtimeState.supplyTemperatureC,
         zoneRhPct: zone.relativeHumidityPct,
         outdoorRhPct: weather.relativeHumidityPct,
         supplyRhPct: this.runtimeState.supplyRelativeHumidityPct,
@@ -559,11 +563,22 @@ export class SandboxDataGenerationEngine {
     weather: { temperatureC: number; relativeHumidityPct: number },
     branchFlows: Record<string, number>,
     staticPressurePa: number,
-    mixedAirRhPct: number,
-  ): DeviceTelemetryRecord[] {
-    const readings: DeviceTelemetryRecord[] = [];
-    const noise = this.sandboxTruth.sensor_noise;
+  ) {
+    const readings = [];
     const activeFaults = this.runtimeFaults.filter((fault) => fault.active);
+    const telemetryContext = {
+      observedAt,
+      weather,
+      random: this.random,
+      sensorNoise: this.sandboxTruth.sensor_noise,
+      runtimeState: this.runtimeState,
+      zones: this.runtimeState.zones,
+      branchFlows,
+      staticPressurePa,
+      activeFaults,
+      sourceTruth: this.sandboxTruth.equipment_truth.source_equipment,
+      sourceDevice: this.getSourceDevice(),
+    };
 
     for (const device of this.blueprint.devices) {
       const product = this.productById.get(device.product_id);
@@ -572,150 +587,14 @@ export class SandboxDataGenerationEngine {
         throw new Error(`Missing product ${device.product_id} for device ${device.id}`);
       }
 
-      if (device.kind === "source_equipment") {
-        readings.push({
-          deviceId: device.id,
-          productId: device.product_id,
-          category: product.category,
-          observedAt,
-          telemetry: {
-            operating_mode: this.runtimeState.sourceMode,
-            supply_air_temperature_c: round(this.runtimeState.supplyTemperatureC),
-            return_air_temperature_c: round(this.averageOfZones("temperatureC")),
-            outdoor_air_temperature_c: round(weather.temperatureC),
-            supply_airflow_m3_h: round(Object.values(branchFlows).reduce((sum, flow) => sum + flow, 0)),
-            electrical_power_kw: round(
-              4.6 * (this.runtimeState.supplyFanSpeedPct / 100) +
-                (this.runtimeState.sourceMode === "cooling" ? 7.2 : this.runtimeState.sourceMode === "heating" ? 6.8 : 1.1),
-              2,
-            ),
-            fault_state: activeFaults.some((fault) => fault.faultType === "controller_fault") ? "controller_fault" : "none",
-          },
-        });
-        continue;
-      }
-
-      if (product.category === "actuator") {
-        const actuator = this.runtimeState.actuators.get(device.id);
-
-        if (!actuator) {
-          continue;
-        }
-
-        if (product.id === "belimo_nmv_d3_mp_vav_compact") {
-          readings.push({
-            deviceId: device.id,
-            productId: product.id,
-            category: product.category,
-            observedAt,
-            telemetry: {
-              airflow_setpoint_m3_h: round((device.design.design_airflow_m3_h ?? 900) * (actuator.commandPct / 100)),
-              airflow_measured_m3_h: round(branchFlows[device.id] + gaussianNoise(this.random, noise.airflow_m3_h_sigma)),
-              damper_position_pct: round(actuator.feedbackPct),
-              dynamic_pressure_pa: round(staticPressurePa * 0.42 + gaussianNoise(this.random, noise.pressure_pa_sigma)),
-              zone_mode: "vav",
-            },
-          });
-          continue;
-        }
-
-        if (product.id === "belimo_nm24a_mod_air_damper_actuator") {
-          readings.push({
-            deviceId: device.id,
-            productId: product.id,
-            category: product.category,
-            observedAt,
-            telemetry: {
-              commanded_position_pct: round(actuator.commandPct),
-              feedback_position_pct: round(actuator.feedbackPct),
-              rotation_direction:
-                actuator.rotationDirection === 0 ? "idle" : actuator.rotationDirection === 1 ? "opening" : "closing",
-              estimated_torque_nm: round(actuator.torqueNmm / 1000, 3),
-              actuator_body_temperature_c: round(actuator.bodyTemperatureC),
-            },
-          });
-        } else {
-          readings.push({
-            deviceId: device.id,
-            productId: product.id,
-            category: product.category,
-            observedAt,
-            telemetry: {
-              "setpoint_position_%": round(actuator.commandPct),
-              "feedback_position_%": round(actuator.feedbackPct),
-              rotation_direction: actuator.rotationDirection,
-              motor_torque_Nmm: round(actuator.torqueNmm, 2),
-              power_W: round(actuator.powerW, 3),
-              internal_temperature_deg_C: round(actuator.bodyTemperatureC),
-              test_number: -1,
-            },
-          });
-        }
-        continue;
-      }
-
-      const servedZone = device.served_space_ids[0] ? this.runtimeState.zones.get(device.served_space_ids[0]) : null;
-
-      if (product.id === "belimo_22dt_12r_duct_temperature_sensor") {
-        const reading = device.id === "mixed-air-temp-1" ? this.runtimeState.mixedAirTemperatureC : this.runtimeState.supplyTemperatureC;
-        readings.push({
-          deviceId: device.id,
-          productId: product.id,
-          category: product.category,
-          observedAt,
-          telemetry: {
-            temperature_c: round(reading + gaussianNoise(this.random, noise.temperature_c_sigma)),
-          },
-        });
-        continue;
-      }
-
-      if (product.id === "belimo_22dth_15m_duct_humidity_temperature_sensor") {
-        readings.push({
-          deviceId: device.id,
-          productId: product.id,
-          category: product.category,
-          observedAt,
-          telemetry: {
-            temperature_c: round(this.runtimeState.supplyTemperatureC + gaussianNoise(this.random, noise.temperature_c_sigma)),
-            relative_humidity_pct: round(this.runtimeState.supplyRelativeHumidityPct + gaussianNoise(this.random, noise.humidity_pct_sigma)),
-            dew_point_c: round(this.runtimeState.supplyTemperatureC - (100 - this.runtimeState.supplyRelativeHumidityPct) / 5),
-          },
-        });
-        continue;
-      }
-
-      if (product.id === "belimo_22adp_154k_differential_pressure_sensor") {
-        const alarmState = this.runtimeState.filterLoadingFactor > 0.35 ? "high_filter_drop" : staticPressurePa < 180 ? "low_static" : "normal";
-        readings.push({
-          deviceId: device.id,
-          productId: product.id,
-          category: product.category,
-          observedAt,
-          telemetry: {
-            differential_pressure_pa: round(staticPressurePa + gaussianNoise(this.random, noise.pressure_pa_sigma)),
-            estimated_airflow_m3_h: round(
-              Object.values(branchFlows).reduce((sum, flow) => sum + flow, 0) + gaussianNoise(this.random, noise.airflow_m3_h_sigma),
-            ),
-            alarm_state: alarmState,
-          },
-        });
-        continue;
-      }
-
-      if (product.id === "belimo_22rtm_5u00a_room_iaq_sensor" && servedZone) {
-        readings.push({
-          deviceId: device.id,
-          productId: product.id,
-          category: product.category,
-          observedAt,
-          telemetry: {
-            room_temperature_c: round(servedZone.temperatureC + gaussianNoise(this.random, noise.temperature_c_sigma)),
-            room_relative_humidity_pct: round(servedZone.relativeHumidityPct + gaussianNoise(this.random, noise.humidity_pct_sigma)),
-            room_co2_ppm: round(servedZone.co2Ppm + gaussianNoise(this.random, noise.co2_ppm_sigma)),
-          },
-        });
-      }
+      readings.push(
+        buildDeviceTelemetryRecord({
+          device,
+          product,
+          actuator: this.runtimeState.actuators.get(device.id) ?? null,
+          context: telemetryContext,
+        }),
+      );
     }
 
     return readings;
@@ -819,5 +698,55 @@ export class SandboxDataGenerationEngine {
         isStale: true,
       };
     }
+  }
+
+  private computeAchievableSupplyTemperature(
+    sourceMode: SandboxSourceMode,
+    requestedSupplyTemperatureC: number,
+    mixedAirTemperatureC: number,
+    outdoorTemperatureC: number,
+    totalSupplyAirflowM3H: number,
+  ) {
+    const sourceTruth = this.sandboxTruth.equipment_truth.source_equipment;
+    const mDotSupplyKgPerS = (Math.max(totalSupplyAirflowM3H, 200) / 3600) * 1.2;
+    const capacityToDeltaTC = (capacityKw: number) => (capacityKw * 1000) / Math.max(mDotSupplyKgPerS * 1005, 1);
+
+    if (sourceMode === "cooling") {
+      const minimumAchievableSupplyTemperatureC = mixedAirTemperatureC - capacityToDeltaTC(sourceTruth.cooling_capacity_kw);
+      return Math.max(requestedSupplyTemperatureC, minimumAchievableSupplyTemperatureC);
+    }
+
+    if (sourceMode === "heating") {
+      const maximumAchievableSupplyTemperatureC = mixedAirTemperatureC + capacityToDeltaTC(sourceTruth.heating_capacity_kw);
+      return Math.min(requestedSupplyTemperatureC, maximumAchievableSupplyTemperatureC);
+    }
+
+    if (sourceMode === "economizer") {
+      const economizedSupplyTemperatureC =
+        mixedAirTemperatureC -
+        Math.max(0, mixedAirTemperatureC - outdoorTemperatureC) * sourceTruth.economizer_effectiveness;
+      return Math.min(requestedSupplyTemperatureC, economizedSupplyTemperatureC);
+    }
+
+    return mixedAirTemperatureC;
+  }
+
+  private computeSupplyRelativeHumidityPct(
+    sourceMode: SandboxSourceMode,
+    mixedAirTemperatureC: number,
+    mixedAirRhPct: number,
+    supplyTemperatureC: number,
+  ) {
+    const mixedHumidityRatio = humidityRatioFromRh(mixedAirTemperatureC, mixedAirRhPct);
+
+    if (sourceMode === "cooling") {
+      const nearSaturatedLeavingHumidityRatio = humidityRatioFromRh(supplyTemperatureC, 92);
+      return relativeHumidityFromHumidityRatio(
+        supplyTemperatureC,
+        Math.min(mixedHumidityRatio, nearSaturatedLeavingHumidityRatio),
+      );
+    }
+
+    return relativeHumidityFromHumidityRatio(supplyTemperatureC, mixedHumidityRatio);
   }
 }

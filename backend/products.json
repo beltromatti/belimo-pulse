@@ -649,14 +649,34 @@
           "unit": "degC"
         },
         {
+          "name": "mixed_air_temperature_c",
+          "type": "number",
+          "unit": "degC"
+        },
+        {
           "name": "outdoor_air_temperature_c",
           "type": "number",
           "unit": "degC"
         },
         {
+          "name": "outdoor_air_fraction",
+          "type": "number",
+          "unit": "fraction"
+        },
+        {
           "name": "supply_airflow_m3_h",
           "type": "number",
           "unit": "m3/h"
+        },
+        {
+          "name": "design_supply_airflow_m3_h",
+          "type": "number",
+          "unit": "m3/h"
+        },
+        {
+          "name": "supply_air_co2_ppm",
+          "type": "number",
+          "unit": "ppm"
         },
         {
           "name": "electrical_power_kw",

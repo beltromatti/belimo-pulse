@@ -1,5 +1,7 @@
 export const AIR_DENSITY_KG_PER_M3 = 1.2;
 export const AIR_HEAT_CAPACITY_J_PER_KG_K = 1005;
+export const WATER_VAPOR_LATENT_HEAT_J_PER_KG = 2_450_000;
+export const STANDARD_ATMOSPHERIC_PRESSURE_KPA = 101.325;
 export const OUTDOOR_CO2_PPM = 420;
 export const NOMINAL_ROOM_RH_PCT = 45;
 
@@ -32,6 +34,7 @@ export type ZoneAirQualityInput = {
   zoneVolumeM3: number;
   zoneCo2Ppm: number;
   outdoorCo2Ppm: number;
+  supplyCo2Ppm: number;
   supplyAirflowM3H: number;
   infiltrationAch: number;
   occupancyCount: number;
@@ -40,6 +43,9 @@ export type ZoneAirQualityInput = {
 
 export type ZoneHumidityInput = {
   dtSeconds: number;
+  zoneTemperatureC: number;
+  outdoorTemperatureC: number;
+  supplyTemperatureC: number;
   zoneRhPct: number;
   outdoorRhPct: number;
   supplyRhPct: number;
@@ -133,25 +139,34 @@ export function computeZoneCo2Step(input: ZoneAirQualityInput) {
   const dt = input.dtSeconds;
   const ventilationM3PerS = input.supplyAirflowM3H / 3600;
   const infiltrationM3PerS = (input.zoneVolumeM3 * input.infiltrationAch) / 3600;
-  const totalFreshAirM3PerS = ventilationM3PerS + infiltrationM3PerS;
-  const airChangesPerSecond = totalFreshAirM3PerS / Math.max(input.zoneVolumeM3, 1);
+  const zoneVolume = Math.max(input.zoneVolumeM3, 1);
+  const supplyExchangePpmPerSecond = (ventilationM3PerS / zoneVolume) * (input.supplyCo2Ppm - input.zoneCo2Ppm);
+  const infiltrationExchangePpmPerSecond = (infiltrationM3PerS / zoneVolume) * (input.outdoorCo2Ppm - input.zoneCo2Ppm);
   const generationM3PerS = input.occupancyCount * input.co2GenerationLpsPerPerson / 1000;
-  const generationPpmPerSecond = (generationM3PerS / Math.max(input.zoneVolumeM3, 1)) * 1_000_000;
-  const exchangePpmPerSecond = airChangesPerSecond * (input.outdoorCo2Ppm - input.zoneCo2Ppm);
-  return Math.max(OUTDOOR_CO2_PPM, input.zoneCo2Ppm + (generationPpmPerSecond + exchangePpmPerSecond) * dt);
+  const generationPpmPerSecond = (generationM3PerS / zoneVolume) * 1_000_000;
+  const nextCo2Ppm =
+    input.zoneCo2Ppm + (generationPpmPerSecond + supplyExchangePpmPerSecond + infiltrationExchangePpmPerSecond) * dt;
+  return Math.max(Math.min(input.outdoorCo2Ppm, input.supplyCo2Ppm), nextCo2Ppm);
 }
 
 export function computeZoneRhStep(input: ZoneHumidityInput) {
   const dt = input.dtSeconds;
-  const ventilationWeight = clamp(input.supplyAirflowM3H / Math.max(input.zoneVolumeM3 * 18, 1), 0, 1.2);
-  const infiltrationWeight = clamp(input.infiltrationAch / 3, 0, 0.5);
-  const latentBoost = (input.occupancyCount * input.latentGainWPerPerson) / Math.max(input.zoneVolumeM3 * 40, 1);
-  const targetRh =
-    input.zoneRhPct +
-    (input.supplyRhPct - input.zoneRhPct) * ventilationWeight +
-    (input.outdoorRhPct - input.zoneRhPct) * infiltrationWeight +
-    latentBoost;
-  return clamp(lerp(input.zoneRhPct, targetRh, clamp(dt / 120, 0, 1)), 18, 75);
+  const zoneHumidityRatio = humidityRatioFromRh(input.zoneTemperatureC, input.zoneRhPct);
+  const supplyHumidityRatio = humidityRatioFromRh(input.supplyTemperatureC, input.supplyRhPct);
+  const outdoorHumidityRatio = humidityRatioFromRh(input.outdoorTemperatureC, input.outdoorRhPct);
+  const dryAirMassKg = Math.max(input.zoneVolumeM3 * AIR_DENSITY_KG_PER_M3, 1);
+  const mDotSupplyKgPerS = (input.supplyAirflowM3H / 3600) * AIR_DENSITY_KG_PER_M3;
+  const mDotInfiltrationKgPerS = ((input.zoneVolumeM3 * input.infiltrationAch) / 3600) * AIR_DENSITY_KG_PER_M3;
+  const moistureGenerationKgPerS =
+    (input.occupancyCount * input.latentGainWPerPerson) / WATER_VAPOR_LATENT_HEAT_J_PER_KG;
+  const deltaHumidityRatio =
+    ((mDotSupplyKgPerS * (supplyHumidityRatio - zoneHumidityRatio) +
+      mDotInfiltrationKgPerS * (outdoorHumidityRatio - zoneHumidityRatio) +
+      moistureGenerationKgPerS) *
+      dt) /
+    dryAirMassKg;
+  const nextHumidityRatio = Math.max(0.0005, zoneHumidityRatio + deltaHumidityRatio);
+  return relativeHumidityFromHumidityRatio(input.zoneTemperatureC, nextHumidityRatio);
 }
 
 export function computeComfortScore(
@@ -183,11 +198,18 @@ export function computeMixedAirTemperature(outdoorTempC: number, returnTempC: nu
 }
 
 export function computeMixedRelativeHumidity(
+  outdoorTempC: number,
   outdoorRhPct: number,
+  returnTempC: number,
   returnRhPct: number,
+  mixedAirTemperatureC: number,
   outdoorAirFraction: number,
 ) {
-  return clamp(outdoorRhPct * outdoorAirFraction + returnRhPct * (1 - outdoorAirFraction), 15, 95);
+  const outdoorHumidityRatio = humidityRatioFromRh(outdoorTempC, outdoorRhPct);
+  const returnHumidityRatio = humidityRatioFromRh(returnTempC, returnRhPct);
+  const mixedHumidityRatio =
+    outdoorHumidityRatio * outdoorAirFraction + returnHumidityRatio * (1 - outdoorAirFraction);
+  return relativeHumidityFromHumidityRatio(mixedAirTemperatureC, mixedHumidityRatio);
 }
 
 export function computeStaticPressurePa(fanSpeedPct: number, totalFlowM3H: number, designFlowM3H: number, filterFactor: number) {
@@ -199,7 +221,37 @@ export function computeStaticPressurePa(fanSpeedPct: number, totalFlowM3H: numbe
   return Math.max(25, availableStatic - ductDrop - filterDrop);
 }
 
-export function computeFilterLoading(runtimeHours: number, progressiveFaultSeverity: number) {
-  const naturalLoading = clamp(runtimeHours / 300, 0, 0.18);
+export function computeFilterLoading(runtimeHours: number, progressiveFaultSeverity: number, hoursToFullScale = 300) {
+  const naturalLoading = clamp(runtimeHours / Math.max(hoursToFullScale, 1), 0, 0.18);
   return clamp(naturalLoading + progressiveFaultSeverity, 0, 1);
+}
+
+export function saturationVaporPressureKpa(temperatureC: number) {
+  return 0.61094 * Math.exp((17.625 * temperatureC) / (temperatureC + 243.04));
+}
+
+export function humidityRatioFromRh(
+  temperatureC: number,
+  relativeHumidityPct: number,
+  pressureKpa = STANDARD_ATMOSPHERIC_PRESSURE_KPA,
+) {
+  const rh = clamp(relativeHumidityPct / 100, 0, 1);
+  const vaporPressureKpa = rh * saturationVaporPressureKpa(temperatureC);
+  return 0.62198 * vaporPressureKpa / Math.max(pressureKpa - vaporPressureKpa, 0.1);
+}
+
+export function relativeHumidityFromHumidityRatio(
+  temperatureC: number,
+  humidityRatio: number,
+  pressureKpa = STANDARD_ATMOSPHERIC_PRESSURE_KPA,
+) {
+  const vaporPressureKpa = (humidityRatio * pressureKpa) / Math.max(0.62198 + humidityRatio, 0.001);
+  const saturationPressureKpa = saturationVaporPressureKpa(temperatureC);
+  return clamp((vaporPressureKpa / Math.max(saturationPressureKpa, 0.01)) * 100, 5, 98);
+}
+
+export function dewPointFromTempRh(temperatureC: number, relativeHumidityPct: number) {
+  const rh = clamp(relativeHumidityPct, 1, 100);
+  const alpha = Math.log(rh / 100) + (17.625 * temperatureC) / (243.04 + temperatureC);
+  return (243.04 * alpha) / (17.625 - alpha);
 }
