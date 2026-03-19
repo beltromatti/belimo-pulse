@@ -90,6 +90,8 @@ jobs:
           AWS_EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
           AWS_EC2_USER: ${{ secrets.AWS_EC2_USER }}
           BACKEND_ENV_FILE_B64: ${{ secrets.BACKEND_ENV_FILE_B64 }}
+          BACKEND_DATABASE_ENV_B64: ${{ secrets.BACKEND_DATABASE_ENV_B64 }}
+          POSTGRES_ENV_FILE_B64: ${{ secrets.POSTGRES_ENV_FILE_B64 }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           GHCR_USERNAME: ${{ needs.build_image.outputs.ghcr_username }}
           IMAGE_REF: ${{ needs.build_image.outputs.image_ref }}
@@ -97,9 +99,11 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i "$HOME/.ssh/belimo" "${AWS_EC2_USER}@${AWS_EC2_HOST}" \
-            "BACKEND_ENV_FILE_B64='${BACKEND_ENV_FILE_B64}' GHCR_PULL_TOKEN='${GHCR_PULL_TOKEN}' GHCR_USERNAME='${GHCR_USERNAME}' IMAGE_REF='${IMAGE_REF}' IMAGE_REPOSITORY='${IMAGE_REPOSITORY}' bash -s" <<'EOF'
+            "BACKEND_ENV_FILE_B64='${BACKEND_ENV_FILE_B64}' BACKEND_DATABASE_ENV_B64='${BACKEND_DATABASE_ENV_B64}' POSTGRES_ENV_FILE_B64='${POSTGRES_ENV_FILE_B64}' GHCR_PULL_TOKEN='${GHCR_PULL_TOKEN}' GHCR_USERNAME='${GHCR_USERNAME}' IMAGE_REF='${IMAGE_REF}' IMAGE_REPOSITORY='${IMAGE_REPOSITORY}' bash -s" <<'EOF'
           set -euo pipefail
           sudo install -d -m 755 /opt/belimo-pulse/backend
+          sudo install -d -m 755 /opt/belimo-pulse/postgres
+          sudo install -d -m 700 -o 999 -g 999 /opt/belimo-pulse/postgres/data
           sudo install -d -m 755 /opt/belimo-pulse/caddy/conf
           sudo install -d -m 755 /opt/belimo-pulse/caddy/data
           sudo install -d -m 755 /opt/belimo-pulse/caddy/config
@@ -112,17 +116,53 @@ jobs:
           }
           CADDYFILE
 
-          printf '%s' "$BACKEND_ENV_FILE_B64" | base64 -d | sudo tee /opt/belimo-pulse/backend/.env >/dev/null
+          printf '%s' "$BACKEND_ENV_FILE_B64" | base64 -d | sudo tee /opt/belimo-pulse/backend/.env.base >/dev/null
+          printf '%s' "$BACKEND_DATABASE_ENV_B64" | base64 -d | sudo tee /opt/belimo-pulse/backend/database.env >/dev/null
+          printf '%s' "$POSTGRES_ENV_FILE_B64" | base64 -d | sudo tee /opt/belimo-pulse/postgres/postgres.env >/dev/null
+          sudo chmod 600 /opt/belimo-pulse/backend/.env.base /opt/belimo-pulse/backend/database.env /opt/belimo-pulse/postgres/postgres.env
+          sudo sh -c "grep -v -E '^(DATABASE_URL|DATABASE_SSL)=' /opt/belimo-pulse/backend/.env.base > /opt/belimo-pulse/backend/.env.runtime"
+          sudo sh -c "cat /opt/belimo-pulse/backend/database.env >> /opt/belimo-pulse/backend/.env.runtime"
           echo "$GHCR_PULL_TOKEN" | sudo docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
           sudo docker pull "$IMAGE_REF"
+          sudo docker pull postgres:17.9
           sudo docker pull caddy:2
           sudo docker network create belimo-pulse >/dev/null 2>&1 || true
+          sudo docker rm -f belimo-pulse-postgres >/dev/null 2>&1 || true
           sudo docker rm -f belimo-pulse-backend >/dev/null 2>&1 || true
           sudo docker rm -f belimo-pulse-caddy >/dev/null 2>&1 || true
           sudo docker run -d \
+            --name belimo-pulse-postgres \
+            --restart unless-stopped \
+            --env-file /opt/belimo-pulse/postgres/postgres.env \
+            --network belimo-pulse \
+            -p 5432:5432 \
+            -v /opt/belimo-pulse/postgres/data:/var/lib/postgresql/data \
+            --health-cmd='pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+            --health-interval=10s \
+            --health-timeout=5s \
+            --health-retries=6 \
+            postgres:17.9 \
+            -c listen_addresses='*' \
+            -c password_encryption=scram-sha-256
+
+          postgres_healthy=0
+          for attempt in $(seq 1 20); do
+            if sudo docker inspect --format '{{.State.Health.Status}}' belimo-pulse-postgres 2>/dev/null | grep -q healthy; then
+              postgres_healthy=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$postgres_healthy" -ne 1 ]; then
+            sudo docker logs belimo-pulse-postgres
+            exit 1
+          fi
+
+          sudo docker run -d \
             --name belimo-pulse-backend \
             --restart unless-stopped \
-            --env-file /opt/belimo-pulse/backend/.env \
+            --env-file /opt/belimo-pulse/backend/.env.runtime \
             --network belimo-pulse \
             -p 127.0.0.1:8080:8080 \
             "$IMAGE_REF"
@@ -149,6 +189,7 @@ jobs:
           done
 
           if [ "$healthy" -ne 1 ]; then
+            sudo docker logs belimo-pulse-postgres
             sudo docker logs belimo-pulse-backend
             sudo docker logs belimo-pulse-caddy
             exit 1
