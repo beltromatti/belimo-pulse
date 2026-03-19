@@ -11,6 +11,7 @@ const MAX_TOOL_ROUNDS = 6;
 
 export class BuildingBrainAgent {
   private readonly openai: OpenAI;
+  private readonly model: string;
   private readonly conversations = new Map<string, ChatMessage[]>();
   private readonly alerts: BrainAlert[] = [];
   private readonly systemPrompt: string;
@@ -23,8 +24,10 @@ export class BuildingBrainAgent {
   constructor(
     private readonly platform: BelimoPlatform,
     openaiApiKey: string,
+    model = "gpt-4.1",
   ) {
-    this.openai = new OpenAI({ apiKey: openaiApiKey });
+    this.openai = new OpenAI({ apiKey: openaiApiKey.trim() });
+    this.model = model;
 
     const blueprint = platform.getBlueprint();
     const zoneNames = blueprint.spaces.map((s) => `${s.id} ("${s.name}", ${s.geometry.area_m2}m²)`).join(", ");
@@ -81,7 +84,7 @@ Guidelines:
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const completion = await this.openai.chat.completions.create({
-        model: "gpt-4.1",
+        model: this.model,
         messages: openaiMessages,
         tools: brainToolDefinitions,
         tool_choice: "auto",

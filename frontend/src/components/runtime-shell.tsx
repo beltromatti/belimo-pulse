@@ -33,6 +33,7 @@ const RuntimeScene = dynamic(
 
 type RuntimeShellProps = {
   initial: RuntimeBootstrapPayload;
+  initialBrainAlerts?: BrainAlert[];
   websocketUrl: string;
 };
 
@@ -107,7 +108,7 @@ function getOperationalNarrative({
   return statements;
 }
 
-export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
+export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: RuntimeShellProps) {
   const [runtime, setRuntime] = useState<RuntimeState>({
     twin: initial.latestTwinSnapshot,
     sandbox: initial.latestSandboxBatch,
@@ -120,7 +121,7 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
     initial.latestTwinSnapshot?.summary.worstZoneId ?? initial.blueprint.spaces[0]?.id ?? null,
   );
   const [controlError, setControlError] = useState<string | null>(null);
-  const [brainAlerts, setBrainAlerts] = useState<BrainAlert[]>([]);
+  const [brainAlerts, setBrainAlerts] = useState<BrainAlert[]>(initialBrainAlerts ?? []);
   const [isPending, startUiTransition] = useTransition();
   const deferredRuntime = useDeferredValue(runtime);
   const heartbeatRef = useRef<number | null>(null);

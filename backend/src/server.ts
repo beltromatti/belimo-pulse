@@ -70,7 +70,7 @@ async function bootstrap() {
     sandboxEngine.getTickSeconds() * 1000,
   );
 
-  const brainAgent = new BuildingBrainAgent(platform, env.OPENAI_API_KEY);
+  const brainAgent = new BuildingBrainAgent(platform, env.OPENAI_API_KEY, env.OPENAI_MODEL);
 
   await platform.hydrateFromDatabase();
   await platform.start();
@@ -163,6 +163,7 @@ async function bootstrap() {
     response.json({
       ok: true,
       payload: platform.getBootstrapPayload(),
+      brainAlerts: brainAgent.getActiveAlerts(),
       websocketPath: "/ws",
     });
   });
@@ -255,13 +256,23 @@ async function bootstrap() {
   });
 
   app.post("/api/chat", async (request, response) => {
-    const payload = chatSchema.parse(request.body ?? {});
-    const result = await brainAgent.chat(payload.message, payload.conversationId);
+    try {
+      const payload = chatSchema.parse(request.body ?? {});
+      const result = await brainAgent.chat(payload.message, payload.conversationId);
 
-    response.json({
-      ok: true,
-      ...result,
-    });
+      response.json({
+        ok: true,
+        ...result,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "AI chat request failed.";
+      console.error("Chat endpoint error:", message);
+
+      response.status(500).json({
+        ok: false,
+        message,
+      });
+    }
   });
 
   app.get("/api/brain/alerts", (_request, response) => {

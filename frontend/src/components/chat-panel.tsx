@@ -38,9 +38,11 @@ export function ChatPanel({ alerts, onDismissAlert }: ChatPanelProps) {
     }
   }, [isOpen]);
 
+  const prevAlertCountRef = useRef(alerts.length);
+
   useEffect(() => {
-    if (undismissedAlerts.length > 0 && !isOpen) {
-      const latest = undismissedAlerts[undismissedAlerts.length - 1];
+    if (alerts.length > prevAlertCountRef.current && !isOpen) {
+      const latest = alerts[alerts.length - 1];
       setMessages((prev) => [
         ...prev,
         {
@@ -50,7 +52,9 @@ export function ChatPanel({ alerts, onDismissAlert }: ChatPanelProps) {
         },
       ]);
     }
-  }, [undismissedAlerts.length]);
+
+    prevAlertCountRef.current = alerts.length;
+  }, [alerts, isOpen]);
 
   const sendMessage = useCallback(
     async (text: string) => {

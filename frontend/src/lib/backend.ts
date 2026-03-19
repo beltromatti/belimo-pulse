@@ -1,4 +1,4 @@
-import { RuntimeBootstrapPayload } from "./runtime-types";
+import { BrainAlert, RuntimeBootstrapPayload } from "./runtime-types";
 
 function trimTrailingSlash(value: string) {
   return value.trim().replace(/\/$/, "");
@@ -48,6 +48,7 @@ export async function fetchRuntimeBootstrap() {
   const payload = (await response.json()) as {
     ok: boolean;
     payload: RuntimeBootstrapPayload;
+    brainAlerts?: BrainAlert[];
     websocketPath?: string;
   };
 
@@ -57,6 +58,7 @@ export async function fetchRuntimeBootstrap() {
 
   return {
     bootstrap: payload.payload,
+    brainAlerts: payload.brainAlerts ?? [],
     apiBaseUrl,
     websocketUrl: payload.websocketPath
       ? deriveWebSocketUrlFromPath(apiBaseUrl, payload.websocketPath)

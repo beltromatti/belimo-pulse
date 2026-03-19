@@ -13,7 +13,11 @@ const envSchema = z.object({
     .default("true")
     .transform((value) => value === "true"),
   ALLOWED_ORIGINS: z.string().default("http://localhost:3000"),
-  OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),
+  OPENAI_API_KEY: z
+    .string()
+    .min(1, "OPENAI_API_KEY is required")
+    .transform((value) => value.trim()),
+  OPENAI_MODEL: z.string().default("gpt-4.1"),
   OPEN_METEO_BASE_URL: z.string().url().default("https://api.open-meteo.com/v1/forecast"),
 });
 

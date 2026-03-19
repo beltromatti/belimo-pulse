@@ -4,7 +4,7 @@ import { fetchRuntimeBootstrap } from "@/lib/backend";
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const { bootstrap, websocketUrl } = await fetchRuntimeBootstrap();
+  const { bootstrap, brainAlerts, websocketUrl } = await fetchRuntimeBootstrap();
 
-  return <RuntimeShell initial={bootstrap} websocketUrl={websocketUrl} />;
+  return <RuntimeShell initial={bootstrap} initialBrainAlerts={brainAlerts} websocketUrl={websocketUrl} />;
 }
