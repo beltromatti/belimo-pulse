@@ -1332,6 +1332,240 @@ def get_torque_at_position(position_center: float, window_pct: float = 10) -> st
 
 
 # ===================================================================
+#  WATCHDOG + PASSPORT TOOLS
+# ===================================================================
+
+@mcp.tool()
+def get_baseline_fingerprint() -> str:
+    """Get the stored baseline torque-by-position profile from the latest sweep analysis.
+    Returns the friction map bins so they can be compared against live telemetry.
+    This is the 'expected' behavior — deviations from this indicate a change."""
+    report = _load_json("report_v2.json")
+    if not report:
+        return json.dumps({"error": "No baseline report. Run a sweep + analysis first."})
+
+    friction = report.get("friction", {})
+    bins = friction.get("torque_std_by_bin", [])
+    sizing = report.get("sizing", {})
+
+    return json.dumps({
+        "baseline_date": "latest_report",
+        "actuator_model": report.get("actuator_model", "LM"),
+        "health_score": report["health"]["score"],
+        "baseline_friction_nmm": sizing.get("max_torque_nmm", 0),
+        "mean_torque_nmm": round(np.mean([b["torque_mean"] for b in bins]), 3) if bins else 0,
+        "torque_by_position": bins,
+        "n_bins": len(bins),
+    }, indent=2)
+
+
+@mcp.tool()
+def start_watchdog(duration_s: float = 30, check_interval: float = 2.0) -> str:
+    """Monitor the actuator for anomalies by comparing live telemetry to baseline.
+    Runs for duration_s seconds, checking every check_interval seconds.
+    Returns immediately if an anomaly is detected (torque > 2x baseline).
+
+    Use this to watch for faults in real time. When it detects something,
+    follow up with run_targeted_sweep() to investigate.
+
+    Args:
+        duration_s: How long to monitor (default 30s, max 120s)
+        check_interval: Seconds between checks (default 2s)
+    """
+    if not _check_influx():
+        return json.dumps({"error": "InfluxDB not reachable. Cannot monitor."})
+
+    # Load baseline
+    report = _load_json("report_v2.json")
+    if not report:
+        return json.dumps({"error": "No baseline. Run a diagnosis first."})
+
+    friction_bins = report.get("friction", {}).get("torque_std_by_bin", [])
+    if not friction_bins:
+        return json.dumps({"error": "No friction baseline data."})
+
+    baseline_mean = np.mean([b["torque_mean"] for b in friction_bins])
+    threshold = baseline_mean * 2.5  # 2.5x baseline = anomaly
+
+    duration_s = min(duration_s, 120)
+
+    try:
+        import time
+        from experiments import read_latest
+
+        samples = []
+        anomalies_found = []
+        t0 = time.time()
+
+        while time.time() - t0 < duration_s:
+            df = read_latest(1)
+            if df is not None and not df.empty:
+                row = df.iloc[-1]
+                torque = abs(float(row.get("motor_torque_Nmm", 0)))
+                position = float(row.get("feedback_position_%", 0))
+                power = float(row.get("power_W", 0))
+
+                sample = {
+                    "time_s": round(time.time() - t0, 1),
+                    "position": round(position, 1),
+                    "torque_nmm": round(torque, 3),
+                    "power_mw": round(power * 1000, 1),
+                    "baseline_mean": round(baseline_mean, 3),
+                    "ratio_to_baseline": round(torque / max(baseline_mean, 0.01), 2),
+                }
+                samples.append(sample)
+
+                if torque > threshold:
+                    anomalies_found.append({
+                        "time_s": sample["time_s"],
+                        "position": position,
+                        "torque_nmm": torque,
+                        "ratio": sample["ratio_to_baseline"],
+                        "alert": f"Torque {torque:.2f} Nmm ({sample['ratio_to_baseline']:.1f}x baseline) at {position:.0f}%",
+                    })
+                    # Found anomaly — return immediately so Claude can investigate
+                    return json.dumps({
+                        "status": "ANOMALY_DETECTED",
+                        "monitoring_duration_s": round(time.time() - t0, 1),
+                        "total_samples": len(samples),
+                        "anomaly": anomalies_found[-1],
+                        "baseline_mean_nmm": round(baseline_mean, 3),
+                        "threshold_nmm": round(threshold, 3),
+                        "action": f"Torque anomaly at {position:.0f}%. Run run_targeted_sweep(start_pct={max(0,position-15):.0f}, end_pct={min(100,position+15):.0f}) to investigate.",
+                        "recent_samples": samples[-5:],
+                    }, indent=2)
+
+            time.sleep(check_interval)
+
+        return json.dumps({
+            "status": "NOMINAL",
+            "monitoring_duration_s": round(time.time() - t0, 1),
+            "total_samples": len(samples),
+            "baseline_mean_nmm": round(baseline_mean, 3),
+            "threshold_nmm": round(threshold, 3),
+            "max_torque_seen": round(max((s["torque_nmm"] for s in samples), default=0), 3),
+            "message": f"Monitored for {duration_s:.0f}s. No anomalies (all torque below {threshold:.2f} Nmm).",
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def generate_actuator_passport() -> str:
+    """Generate a structured Actuator Passport — a complete identity card from all measured data.
+    Combines health report, electronics report, and commissioning parameters into
+    one document. Every value is labeled as MEASURED or DERIVED.
+
+    This is what Belimo could ship with every actuator after commissioning."""
+    report = _load_json("report_v2.json")
+    if not report:
+        return json.dumps({"error": "No health report. Run diagnosis first."})
+
+    electronics = None
+    for name in ["electronics_test600_report.json", "electronics_test500_report.json"]:
+        electronics = _load_json(name)
+        if electronics:
+            break
+
+    commission = json.loads(auto_commission())
+
+    h = report["health"]
+    s = report["sizing"]
+    l = report["linkage"]
+    f = report["friction"]
+    hunting = report.get("hunting", {})
+    steps = report.get("steps", {})
+
+    # Build passport
+    passport = {
+        "document": "ACTUATOR PASSPORT",
+        "generated": pd.Timestamp.now().isoformat(),
+        "actuator": {
+            "model": report.get("actuator_model", "LM") + " series",
+            "type": "LM24A" if s.get("max_torque_nmm", 0) < 100 else "LM24A (loaded)",
+            "rated_torque_nmm": 5000,
+            "serial": "LM24A-DEMO-001",
+        },
+        "measured_characteristics": {
+            "baseline_friction_nmm": {"value": round(float(np.mean([b["torque_mean"] for b in f.get("torque_std_by_bin", [])])), 3) if f.get("torque_std_by_bin") else 0, "source": "MEASURED from sweep"},
+            "max_torque_nmm": {"value": s.get("max_torque_nmm", 0), "source": "MEASURED from sweep"},
+            "dead_band_pct": {"value": l.get("dead_band_pct", 0), "source": "MEASURED from linkage analysis"},
+            "smoothness_score": {"value": f.get("smoothness_score", 0), "source": "MEASURED from friction analysis"},
+            "resonance_frequency_hz": {"value": hunting.get("dominant_frequency_hz"), "source": "MEASURED from hunting FFT"} if hunting.get("dominant_frequency_hz") else {"value": None, "source": "NOT MEASURED"},
+            "max_overshoot_pct": {"value": hunting.get("max_overshoot_pct", 0), "source": "MEASURED from hunting test"},
+            "avg_tracking_error_pct": {"value": hunting.get("avg_tracking_error", 0), "source": "MEASURED from hunting test"},
+            "avg_transit_time_s": {"value": steps.get("avg_transit_time_s", 0), "source": "MEASURED from step response"},
+            "idle_power_mw": {"value": electronics["metrics"]["idle_power_mw"], "source": "MEASURED from electronics test"} if electronics else {"value": None, "source": "NOT MEASURED"},
+        },
+        "operating_envelope": {
+            "position_range_pct": {"value": f"{commission.get('position_limits', {}).get('min_pct', 0):.0f}-{commission.get('position_limits', {}).get('max_pct', 100):.0f}", "source": "DERIVED from dead zone analysis"},
+            "max_slew_rate_pct_s": {"value": commission.get("hunting_prevention", {}).get("max_slew_rate_pct_per_s"), "source": "DERIVED from resonance frequency"},
+            "max_control_bandwidth_hz": {"value": commission.get("hunting_prevention", {}).get("max_safe_frequency_hz"), "source": "DERIVED from resonance (1/3 rule)"},
+        },
+        "health_assessment": {
+            "score": h["score"],
+            "grade": h["grade"],
+            "components": h.get("components", {}),
+            "sizing": s["verdict"],
+            "linkage": l["verdict"],
+            "friction": f["verdict"],
+            "hunting": hunting.get("verdict", "NOT TESTED"),
+            "hunting_risk_score": hunting.get("risk_score", None),
+        },
+        "recommendations": report.get("recommendations", []),
+        "passport_text": "",
+    }
+
+    # Generate human-readable text
+    mc = passport["measured_characteristics"]
+    oe = passport["operating_envelope"]
+    ha = passport["health_assessment"]
+
+    text = (
+        f"{'='*50}\n"
+        f"  ACTUATOR PASSPORT — {passport['actuator']['serial']}\n"
+        f"  {passport['actuator']['model']} | Rated {passport['actuator']['rated_torque_nmm']} Nmm\n"
+        f"  Generated: {passport['generated'][:19]}\n"
+        f"{'='*50}\n\n"
+        f"  MEASURED CHARACTERISTICS\n"
+        f"  {'─'*40}\n"
+        f"  Baseline friction:   {mc['baseline_friction_nmm']['value']} Nmm\n"
+        f"  Dead band:           {mc['dead_band_pct']['value']}%\n"
+        f"  Smoothness:          {mc['smoothness_score']['value']}\n"
+        f"  Transit time (avg):  {mc['avg_transit_time_s']['value']}s\n"
+        f"  Max overshoot:       {mc['max_overshoot_pct']['value']}%\n"
+        f"  Tracking error:      {mc['avg_tracking_error_pct']['value']}%\n"
+    )
+    if mc["resonance_frequency_hz"]["value"]:
+        text += f"  Resonance freq:      {mc['resonance_frequency_hz']['value']:.4f} Hz\n"
+    if mc["idle_power_mw"]["value"] is not None:
+        text += f"  Idle power:          {mc['idle_power_mw']['value']} mW\n"
+
+    text += (
+        f"\n  OPERATING ENVELOPE (derived)\n"
+        f"  {'─'*40}\n"
+        f"  Position range:      {oe['position_range_pct']['value']}%\n"
+        f"  Max slew rate:       {oe['max_slew_rate_pct_s']['value']}%/s\n"
+    )
+    if oe["max_control_bandwidth_hz"]["value"]:
+        text += f"  Max ctrl bandwidth:  {oe['max_control_bandwidth_hz']['value']:.3f} Hz\n"
+
+    text += (
+        f"\n  HEALTH: {ha['score']}/100 (Grade {ha['grade']})\n"
+        f"  {'─'*40}\n"
+        f"  Sizing:    {ha['sizing']}\n"
+        f"  Linkage:   {ha['linkage']}\n"
+        f"  Friction:  {ha['friction']}\n"
+        f"  Hunting:   {ha['hunting']} ({ha.get('hunting_risk_score', 'N/A')}/100)\n"
+        f"\n{'='*50}\n"
+    )
+
+    passport["passport_text"] = text
+    return json.dumps(passport, indent=2, default=str)
+
+
+# ===================================================================
 #  Entry point
 # ===================================================================
 

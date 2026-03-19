@@ -186,6 +186,10 @@ code { background: #14142a !important; color: #06b6d4 !important; font-family: '
 .stat-item { text-align: center; }
 .stat-value { font-family: 'JetBrains Mono'; font-size: 1.6rem; font-weight: 700; }
 .stat-label { font-size: 0.6rem; color: #5a5a70; text-transform: uppercase; letter-spacing: 0.12em; }
+
+/* Force sidebar always open */
+section[data-testid="stSidebar"] { min-width: 320px !important; max-width: 320px !important; transform: none !important; }
+button[data-testid="stSidebarCollapseButton"] { display: none !important; }
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -334,7 +338,11 @@ def render_building_overview():
 def render_sidebar():
     active = st.session_state.get("active_zone", 0)
     z = ZONES[active]
-    d = z["details"]
+    d = z.get("details") or {
+        "sizing_sev": "info", "linkage_sev": "info", "friction_sev": "info", "hunting_sev": "info",
+        "hunting_score": 0, "smoothness": 0, "dead_band": 0,
+        "components": {"sizing": 0, "linkage": 0, "friction": 0, "transit": 0, "symmetry": 0},
+    }
 
     # Zone header
     live_html = ' <span style="color: #22c55e; font-size: 0.6rem;">&#9679; LIVE</span>' if z["real"] else ""
@@ -420,6 +428,20 @@ def render_sidebar():
     else:
         _show_cached_telemetry(z)
 
+    # Watchdog toggle (only for real actuator)
+    if z["real"]:
+        st.sidebar.markdown(
+            '<div style="font-family: JetBrains Mono; font-size: 0.6rem; text-transform: uppercase; '
+            'letter-spacing: 0.12em; color: #5a5a70; margin: 16px 0 8px;">Watchdog Mode</div>',
+            unsafe_allow_html=True,
+        )
+        if st.sidebar.button("Start Watchdog (30s)", key="watchdog_btn", use_container_width=True):
+            _inject_message(
+                "Start the watchdog — monitor this actuator for 30 seconds. "
+                "If you detect any anomaly, immediately investigate it with a targeted sweep. "
+                "Report what you find."
+            )
+
     # Branding
     st.sidebar.markdown(
         '<div style="text-align: center; padding: 14px 0; border-top: 1px solid #1e1e30; margin-top: 20px;">'
@@ -451,14 +473,15 @@ def render_protocols():
         unsafe_allow_html=True,
     )
 
-    cols = st.columns(5)
+    cols = st.columns(6)
     live_note = " (runs on real hardware)" if z["real"] else ""
 
     protocols = [
-        ("Install Verify", f"Run Install Verify protocol on {z['name']}.{live_note} Sweep, analyze, and give me commissioning parameters."),
-        ("Commission Tune", f"Generate commissioning parameters for {z['name']}. What PI gains should the engineer set? Include position limits and slew rate."),
+        ("Install Verify", f"Run Install Verify protocol on {z['name']}.{live_note} Sweep, analyze, and give me commissioning parameters. Label every value as MEASURED or DERIVED."),
+        ("Commission Tune", f"Generate the operating envelope for {z['name']}. What are the measured limits? Include position range, slew rate, resonance frequency. Clearly separate MEASURED from DERIVED."),
         ("Predict Degradation", f"Predict degradation for {z['name']}. Compare baseline to current state. When will it need maintenance?"),
         ("Cost Analysis", f"Estimate the annual cost impact of {z['name']}'s issues for a 50-actuator commercial building. Include energy waste and maintenance."),
+        ("Actuator Passport", f"Generate a complete Actuator Passport for {z['name']}. I want the full identity card with all measured characteristics."),
         ("Move Actuator", f"Move the actuator on {z['name']} to 75% position, then back to 50%.") if z["real"] else
         ("Building Report", f"Give me a summary of all 8 zones in this building. Which ones need immediate attention?"),
     ]
@@ -482,7 +505,7 @@ def render_chat():
     z = ZONES[active]
 
     for msg in st.session_state.messages:
-        avatar = "✦" if msg["role"] == "assistant" else "▸"
+        avatar = "🤖" if msg["role"] == "assistant" else "👤"
         with st.chat_message(msg["role"], avatar=avatar):
             if msg.get("tools"):
                 tool_html = " &#8594; ".join(

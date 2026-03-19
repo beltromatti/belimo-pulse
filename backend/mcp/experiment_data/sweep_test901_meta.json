@@ -1,0 +1,10 @@
+{
+  "experiment": "sweep",
+  "test_number": 901,
+  "timestamp": "2026-03-19T20:49:57.003631",
+  "n_samples": 100,
+  "rated_torque_nmm": 5000,
+  "n_repeats": 1,
+  "steps_per_direction": 50,
+  "step_delay_s": 0.3
+}

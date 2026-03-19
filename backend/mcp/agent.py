@@ -38,6 +38,9 @@ from mcp_server import (
     read_telemetry_stream,
     detect_anomalies,
     get_torque_at_position,
+    start_watchdog,
+    get_baseline_fingerprint,
+    generate_actuator_passport,
 )
 
 SYSTEM_PROMPT = """\
@@ -69,7 +72,7 @@ DERIVED (computed from measurements, clearly label as estimates):
 - Maintenance forecasts — extrapolated from torque trending
 
 Always say "Based on measured resonance at X Hz, the recommended maximum control bandwidth is Y Hz"
-NOT "The optimal PI gains are Kp=0.33, Ti=120s" — we cannot determine exact PI gains without a real control loop, room, and valve.
+NOT "The optimal PI gains are Kp=x, Ti=y" — we cannot determine exact PI gains without a real control loop, room, and valve.
 
 ## ANOMALY INVESTIGATION PROTOCOL
 When you detect something unusual in the data:
@@ -331,6 +334,27 @@ TOOLS = [
             "required": ["position_center"],
         },
     },
+    {
+        "name": "start_watchdog",
+        "description": "Monitor the actuator for anomalies in real time. Compares live torque to baseline every 2 seconds. Returns IMMEDIATELY if anomaly detected (torque > 2.5x baseline). Use to watch for faults live. Follow up with run_targeted_sweep() on detection.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "duration_s": {"type": "number", "default": 30, "description": "Monitoring duration (max 120s)"},
+                "check_interval": {"type": "number", "default": 2.0},
+            },
+        },
+    },
+    {
+        "name": "get_baseline_fingerprint",
+        "description": "Get the stored baseline torque-by-position profile. Used to compare against live data. Returns the friction map bins from the last analysis.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "generate_actuator_passport",
+        "description": "Generate a complete Actuator Passport — structured identity card with ALL measured and derived values. Like a vehicle inspection report. Every value labeled MEASURED or DERIVED.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 TOOL_FUNCTIONS = {
@@ -356,6 +380,9 @@ TOOL_FUNCTIONS = {
     "read_telemetry_stream": read_telemetry_stream,
     "detect_anomalies": detect_anomalies,
     "get_torque_at_position": get_torque_at_position,
+    "start_watchdog": start_watchdog,
+    "get_baseline_fingerprint": get_baseline_fingerprint,
+    "generate_actuator_passport": generate_actuator_passport,
 }
 
 
@@ -373,7 +400,7 @@ def chat(
     user_message: str,
     history: list | None = None,
     on_tool_call: callable = None,
-    model: str = "claude-opus-4-20250514",
+    model: str = "claude-opus-4-6",
 ) -> tuple[str, list]:
     """Send a message, handle tool calls, return (response_text, updated_history).
 
