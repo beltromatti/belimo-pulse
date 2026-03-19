@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 
+import { BrandLockup } from "@/components/brand-lockup";
 import { RuntimeShell } from "@/components/runtime-shell";
 import { BrainAlert, OperatorPolicy, RuntimeBootstrapPayload } from "@/lib/runtime-types";
 
@@ -252,7 +253,7 @@ export function BuildingGateway({ initial, initialBrainAlerts, initialBrainPolic
           <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-white/50 to-transparent" />
           <div className="relative flex items-center justify-between gap-4">
             <div>
-              <p className="text-[12px] font-medium uppercase tracking-[0.32em] text-[#d9691f]">Belimo Pulse</p>
+              <BrandLockup />
               <h1 className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-slate-950 sm:text-4xl">
                 Building Portfolio
               </h1>

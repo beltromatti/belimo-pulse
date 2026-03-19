@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { OrbitControls } from "@react-three/drei/core/OrbitControls";
 import { RoundedBox } from "@react-three/drei/core/RoundedBox";
 import { Html } from "@react-three/drei/web/Html";
@@ -17,6 +16,7 @@ import {
   TwinSnapshot,
   ZoneTwinState,
 } from "@/lib/runtime-types";
+import { BrandLockup } from "@/components/brand-lockup";
 import { getDeviceModelTransform, RuntimeDeviceModel } from "@/components/runtime-device-models";
 
 type RuntimeSceneProps = {
@@ -782,9 +782,7 @@ export function RuntimeScene(props: RuntimeSceneProps) {
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-32 bg-gradient-to-b from-white/55 to-transparent" />
       <div className="pointer-events-none absolute inset-x-4 top-4 z-10 sm:inset-x-6 sm:top-5">
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-full border border-white/55 bg-white/62 px-4 py-3 text-slate-600 backdrop-blur">
-          <div className="flex items-center">
-            <Image src="/belimo-wordmark.svg" alt="Belimo Pulse" width={420} height={72} className="h-7 w-auto sm:h-8" />
-          </div>
+          <BrandLockup />
           <div className="flex flex-wrap items-center justify-end gap-3 text-slate-950">
             <div
               className="flex items-center gap-2"

@@ -25,6 +25,7 @@ import {
   RuntimeSocketMessage,
   ZoneTwinState,
 } from "@/lib/runtime-types";
+import { BrandLockup } from "@/components/brand-lockup";
 import { ChatPanel } from "@/components/chat-panel";
 import { InventoryPanel } from "@/components/inventory-panel";
 
@@ -497,7 +498,7 @@ export function RuntimeShell({ initial, initialBrainAlerts, initialBrainPolicies
             <CardBlock>
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-[13px] font-medium uppercase tracking-[0.34em] text-[#d9691f]">Belimo Pulse</p>
+                  <BrandLockup />
                   <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-slate-950">Sandbox Twin</h1>
                   <p className="mt-2 text-sm leading-6 text-slate-600">
                     Live facility cockpit for the St. Gallen office sandbox, anchored to the Belimo twin pipeline.
