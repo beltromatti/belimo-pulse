@@ -1,0 +1,281 @@
+{
+  "actuator_model": "LM",
+  "is_loaded": "False",
+  "sizing": {
+    "verdict": "UNLOADED",
+    "severity": "info",
+    "max_torque_nmm": 2.14,
+    "sizing_ratio": 0.000428,
+    "is_loaded": false,
+    "detail": "Actuator is running unloaded (max torque 2.1 Nmm = 0.04% of rated 5000 Nmm). This is the internal friction baseline. In a real installation, torque should be 20-80% of rated capacity. Baseline friction: 0.70 Nmm \u2014 useful as reference for future degradation monitoring."
+  },
+  "linkage": {
+    "verdict": "TIGHT",
+    "severity": "pass",
+    "dead_band_pct": 0.0,
+    "detail": "Dead band of 0.0% \u2014 linkage properly secured."
+  },
+  "friction": {
+    "verdict": "SMOOTH",
+    "severity": "pass",
+    "anomaly_positions": [],
+    "smoothness_score": 0.867,
+    "torque_std_by_bin": [
+      {
+        "position": 2.5,
+        "torque_mean": 0.54
+      },
+      {
+        "position": 7.5,
+        "torque_mean": 0.73
+      },
+      {
+        "position": 12.5,
+        "torque_mean": 0.85
+      },
+      {
+        "position": 17.5,
+        "torque_mean": 0.7
+      },
+      {
+        "position": 22.5,
+        "torque_mean": 0.7
+      },
+      {
+        "position": 27.5,
+        "torque_mean": 0.67
+      },
+      {
+        "position": 32.5,
+        "torque_mean": 0.81
+      },
+      {
+        "position": 37.5,
+        "torque_mean": 0.76
+      },
+      {
+        "position": 42.5,
+        "torque_mean": 0.77
+      },
+      {
+        "position": 47.5,
+        "torque_mean": 0.7
+      },
+      {
+        "position": 52.5,
+        "torque_mean": 0.69
+      },
+      {
+        "position": 57.5,
+        "torque_mean": 0.73
+      },
+      {
+        "position": 62.5,
+        "torque_mean": 0.78
+      },
+      {
+        "position": 67.5,
+        "torque_mean": 0.73
+      },
+      {
+        "position": 72.5,
+        "torque_mean": 0.83
+      },
+      {
+        "position": 77.5,
+        "torque_mean": 0.68
+      },
+      {
+        "position": 82.5,
+        "torque_mean": 0.75
+      },
+      {
+        "position": 87.5,
+        "torque_mean": 0.66
+      },
+      {
+        "position": 92.5,
+        "torque_mean": 0.67
+      },
+      {
+        "position": 97.5,
+        "torque_mean": 0.43
+      }
+    ],
+    "detail": "No friction anomalies. Smoothness: 0.87. Clean operation."
+  },
+  "steps": {
+    "verdict": "CRISP",
+    "severity": "pass",
+    "avg_transit_time_s": 7.06,
+    "transit_times": [
+      {
+        "from": 0,
+        "to": 25,
+        "transit_s": 5.43,
+        "step_size": 25
+      },
+      {
+        "from": 0,
+        "to": 50,
+        "transit_s": 10.39,
+        "step_size": 50
+      },
+      {
+        "from": 0,
+        "to": 100,
+        "transit_s": null,
+        "step_size": 100
+      },
+      {
+        "from": 25,
+        "to": 0,
+        "transit_s": 5.49,
+        "step_size": 25
+      },
+      {
+        "from": 25,
+        "to": 50,
+        "transit_s": 5.69,
+        "step_size": 25
+      },
+      {
+        "from": 50,
+        "to": 0,
+        "transit_s": 10.19,
+        "step_size": 50
+      },
+      {
+        "from": 50,
+        "to": 25,
+        "transit_s": 5.47,
+        "step_size": 25
+      },
+      {
+        "from": 50,
+        "to": 75,
+        "transit_s": 5.29,
+        "step_size": 25
+      },
+      {
+        "from": 50,
+        "to": 100,
+        "transit_s": 10.32,
+        "step_size": 50
+      },
+      {
+        "from": 75,
+        "to": 50,
+        "transit_s": 5.46,
+        "step_size": 25
+      },
+      {
+        "from": 75,
+        "to": 100,
+        "transit_s": 5.49,
+        "step_size": 25
+      },
+      {
+        "from": 100,
+        "to": 0,
+        "transit_s": null,
+        "step_size": 100
+      },
+      {
+        "from": 100,
+        "to": 50,
+        "transit_s": 10.35,
+        "step_size": 50
+      },
+      {
+        "from": 100,
+        "to": 75,
+        "transit_s": 5.21,
+        "step_size": 25
+      }
+    ],
+    "avg_overshoot_pct": 0.0,
+    "settling_times": [
+      5.17,
+      10.14,
+      15.06,
+      5.24,
+      5.41,
+      9.92,
+      5.22,
+      4.76,
+      10.07,
+      5.18,
+      5.2,
+      15.03,
+      10.1,
+      4.96
+    ],
+    "detail": "Average overshoot: 0.0%, avg transit: 7.1s. Excellent step response."
+  },
+  "hunting": {
+    "verdict": "MODERATE_RISK",
+    "severity": "warn",
+    "risk_score": 55.4,
+    "max_overshoot_pct": 13.2,
+    "avg_tracking_error": 4.1,
+    "dominant_frequency_hz": 0.023874637887013803,
+    "per_config_results": [
+      {
+        "frequency_hz": 0.02,
+        "avg_error_pct": 0.79,
+        "max_overshoot_pct": 2.81,
+        "phase_lag_s": 0.0,
+        "n_samples": 354
+      },
+      {
+        "frequency_hz": 0.05,
+        "avg_error_pct": 8.37,
+        "max_overshoot_pct": 13.25,
+        "phase_lag_s": 0.17,
+        "n_samples": 263
+      },
+      {
+        "frequency_hz": 0.1,
+        "avg_error_pct": 4.23,
+        "max_overshoot_pct": 8.37,
+        "phase_lag_s": 0.0,
+        "n_samples": 79
+      },
+      {
+        "frequency_hz": 0.2,
+        "avg_error_pct": 2.84,
+        "max_overshoot_pct": 1.78,
+        "phase_lag_s": 3.97,
+        "n_samples": 101
+      }
+    ],
+    "detail": "Hunting risk: 55/100 \u2014 moderate. Overshoot: 13.2%, error: 4.1%."
+  },
+  "health": {
+    "score": 75,
+    "grade": "B",
+    "components": {
+      "sizing": 18,
+      "linkage": 20,
+      "friction": 17.3,
+      "transit": 0.4,
+      "symmetry": 19.7
+    },
+    "detail": "Health: 75/100 (Grade B). sizing: 18, linkage: 20, friction: 17.3, transit: 0.4, symmetry: 19.7."
+  },
+  "recommendations": [
+    {
+      "priority": "INFO",
+      "category": "sizing",
+      "action": "Actuator running unloaded \u2014 sizing cannot be assessed",
+      "detail": "Actuator is running unloaded (max torque 2.1 Nmm = 0.04% of rated 5000 Nmm). This is the internal friction baseline. In a real installation, torque should be 20-80% of rated capacity. Baseline friction: 0.70 Nmm \u2014 useful as reference for future degradation monitoring."
+    },
+    {
+      "priority": "MONITOR",
+      "category": "hunting",
+      "action": "Hunting risk: 55/100",
+      "detail": "Hunting risk: 55/100 \u2014 moderate. Overshoot: 13.2%, error: 4.1%."
+    }
+  ]
+}
