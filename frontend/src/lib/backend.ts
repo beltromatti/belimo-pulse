@@ -1,7 +1,7 @@
 import { RuntimeBootstrapPayload } from "./runtime-types";
 
 function trimTrailingSlash(value: string) {
-  return value.replace(/\/$/, "");
+  return value.trim().replace(/\/$/, "");
 }
 
 export function getApiBaseUrl() {
