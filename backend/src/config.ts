@@ -13,6 +13,7 @@ const envSchema = z.object({
     .default("true")
     .transform((value) => value === "true"),
   ALLOWED_ORIGINS: z.string().default("http://localhost:3000"),
+  OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),
 });
 
 export const env = envSchema.parse(process.env);
