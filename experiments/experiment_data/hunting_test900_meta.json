@@ -1,0 +1,45 @@
+{
+  "experiment": "hunting",
+  "test_number": 900,
+  "timestamp": "2026-03-19T14:14:16.139550",
+  "n_samples": 1037,
+  "rated_torque_nmm": 5000,
+  "configs": [
+    {
+      "freq": 0.02,
+      "amp": 20,
+      "dur": 60,
+      "desc": "slow large oscillation"
+    },
+    {
+      "freq": 0.05,
+      "amp": 15,
+      "dur": 45,
+      "desc": "medium oscillation"
+    },
+    {
+      "freq": 0.1,
+      "amp": 10,
+      "dur": 30,
+      "desc": "fast small oscillation"
+    },
+    {
+      "freq": 0.2,
+      "amp": 5,
+      "dur": 30,
+      "desc": "rapid fine oscillation"
+    },
+    {
+      "freq": 0.02,
+      "amp": 5,
+      "dur": 45,
+      "desc": "slow small \u2014 tests deadband"
+    },
+    {
+      "freq": 0.05,
+      "amp": 30,
+      "dur": 45,
+      "desc": "medium large \u2014 stress test"
+    }
+  ]
+}

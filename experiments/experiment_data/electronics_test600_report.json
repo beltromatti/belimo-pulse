@@ -1,0 +1,334 @@
+{
+  "experiment": "electronic_diagnostics",
+  "test_number": 600,
+  "timestamp": "2026-03-19T14:02:49.919968",
+  "n_samples": 1305,
+  "metrics": {
+    "idle_power_mw": 0.0,
+    "idle_power_status": "OK",
+    "idle_temp_c": 28.8,
+    "power_map": [
+      {
+        "position": 0,
+        "opening_power_mw": 97.4,
+        "opening_torque_nmm": 0.883,
+        "closing_power_mw": 110.2,
+        "closing_torque_nmm": 0.924
+      },
+      {
+        "position": 5,
+        "opening_power_mw": 83.5,
+        "opening_torque_nmm": 0.291,
+        "closing_power_mw": 91.2,
+        "closing_torque_nmm": 0.21
+      },
+      {
+        "position": 10,
+        "opening_power_mw": 55.1,
+        "opening_torque_nmm": 0.175,
+        "closing_power_mw": 63.5,
+        "closing_torque_nmm": 0.216
+      },
+      {
+        "position": 15,
+        "opening_power_mw": 42.7,
+        "opening_torque_nmm": 0.176,
+        "closing_power_mw": 15.1,
+        "closing_torque_nmm": 0.179
+      },
+      {
+        "position": 20,
+        "opening_power_mw": 56.9,
+        "opening_torque_nmm": 0.175,
+        "closing_power_mw": 30.1,
+        "closing_torque_nmm": 0.18
+      },
+      {
+        "position": 25,
+        "opening_power_mw": 88.9,
+        "opening_torque_nmm": 0.204,
+        "closing_power_mw": 57.8,
+        "closing_torque_nmm": 0.233
+      },
+      {
+        "position": 30,
+        "opening_power_mw": 64.3,
+        "opening_torque_nmm": 0.2,
+        "closing_power_mw": 60.5,
+        "closing_torque_nmm": 0.192
+      },
+      {
+        "position": 35,
+        "opening_power_mw": 44.4,
+        "opening_torque_nmm": 0.177,
+        "closing_power_mw": 64.2,
+        "closing_torque_nmm": 0.187
+      },
+      {
+        "position": 40,
+        "opening_power_mw": 0.0,
+        "opening_torque_nmm": 0.035,
+        "closing_power_mw": 75.1,
+        "closing_torque_nmm": 0.182
+      },
+      {
+        "position": 45,
+        "opening_power_mw": 48.8,
+        "opening_torque_nmm": 0.208,
+        "closing_power_mw": 49.9,
+        "closing_torque_nmm": 0.179
+      },
+      {
+        "position": 50,
+        "opening_power_mw": 23.0,
+        "opening_torque_nmm": 0.092,
+        "closing_power_mw": 49.9,
+        "closing_torque_nmm": 0.2
+      },
+      {
+        "position": 55,
+        "opening_power_mw": 45.8,
+        "opening_torque_nmm": 0.174,
+        "closing_power_mw": 0.0,
+        "closing_torque_nmm": 0.0
+      },
+      {
+        "position": 60,
+        "opening_power_mw": 44.6,
+        "opening_torque_nmm": 0.203,
+        "closing_power_mw": 75.3,
+        "closing_torque_nmm": 0.236
+      },
+      {
+        "position": 65,
+        "opening_power_mw": 31.9,
+        "opening_torque_nmm": 0.198,
+        "closing_power_mw": 68.6,
+        "closing_torque_nmm": 0.229
+      },
+      {
+        "position": 70,
+        "opening_power_mw": 72.7,
+        "opening_torque_nmm": 0.172,
+        "closing_power_mw": 70.3,
+        "closing_torque_nmm": 0.22
+      },
+      {
+        "position": 75,
+        "opening_power_mw": 70.0,
+        "opening_torque_nmm": 0.196,
+        "closing_power_mw": 44.9,
+        "closing_torque_nmm": 0.192
+      },
+      {
+        "position": 80,
+        "opening_power_mw": 72.5,
+        "opening_torque_nmm": 0.187,
+        "closing_power_mw": 46.0,
+        "closing_torque_nmm": 0.194
+      },
+      {
+        "position": 85,
+        "opening_power_mw": 43.6,
+        "opening_torque_nmm": 0.205,
+        "closing_power_mw": 39.9,
+        "closing_torque_nmm": 0.185
+      },
+      {
+        "position": 90,
+        "opening_power_mw": 35.0,
+        "opening_torque_nmm": 0.125,
+        "closing_power_mw": 21.9,
+        "closing_torque_nmm": 0.103
+      },
+      {
+        "position": 95,
+        "opening_power_mw": 0.0,
+        "opening_torque_nmm": 0.046,
+        "closing_power_mw": 82.0,
+        "closing_torque_nmm": 0.207
+      },
+      {
+        "position": 100,
+        "opening_power_mw": 5.0,
+        "opening_torque_nmm": 0.101,
+        "closing_power_mw": 0.0,
+        "closing_torque_nmm": 0.001
+      }
+    ],
+    "directional_asymmetry_pct": 8.1,
+    "directional_asymmetry_status": "SYMMETRIC",
+    "power_torque_divergence": [
+      {
+        "position": 0,
+        "power_torque_ratio": 0.115,
+        "divergence": 0.38
+      },
+      {
+        "position": 5,
+        "power_torque_ratio": 0.349,
+        "divergence": 1.17
+      },
+      {
+        "position": 10,
+        "power_torque_ratio": 0.303,
+        "divergence": 1.01
+      },
+      {
+        "position": 15,
+        "power_torque_ratio": 0.163,
+        "divergence": 0.55
+      },
+      {
+        "position": 20,
+        "power_torque_ratio": 0.245,
+        "divergence": 0.82
+      },
+      {
+        "position": 25,
+        "power_torque_ratio": 0.336,
+        "divergence": 1.12
+      },
+      {
+        "position": 30,
+        "power_torque_ratio": 0.318,
+        "divergence": 1.06
+      },
+      {
+        "position": 35,
+        "power_torque_ratio": 0.298,
+        "divergence": 1.0
+      },
+      {
+        "position": 40,
+        "power_torque_ratio": 0.692,
+        "divergence": 2.32
+      },
+      {
+        "position": 45,
+        "power_torque_ratio": 0.255,
+        "divergence": 0.85
+      },
+      {
+        "position": 50,
+        "power_torque_ratio": 0.25,
+        "divergence": 0.84
+      },
+      {
+        "position": 55,
+        "power_torque_ratio": 0.263,
+        "divergence": 0.88
+      },
+      {
+        "position": 60,
+        "power_torque_ratio": 0.273,
+        "divergence": 0.91
+      },
+      {
+        "position": 65,
+        "power_torque_ratio": 0.235,
+        "divergence": 0.79
+      },
+      {
+        "position": 70,
+        "power_torque_ratio": 0.365,
+        "divergence": 1.22
+      },
+      {
+        "position": 75,
+        "power_torque_ratio": 0.296,
+        "divergence": 0.99
+      },
+      {
+        "position": 80,
+        "power_torque_ratio": 0.311,
+        "divergence": 1.04
+      },
+      {
+        "position": 85,
+        "power_torque_ratio": 0.214,
+        "divergence": 0.72
+      },
+      {
+        "position": 90,
+        "power_torque_ratio": 0.25,
+        "divergence": 0.84
+      },
+      {
+        "position": 95,
+        "power_torque_ratio": 0.648,
+        "divergence": 2.17
+      },
+      {
+        "position": 100,
+        "power_torque_ratio": 0.098,
+        "divergence": 0.33
+      }
+    ],
+    "stroke_consistency_cv": 0.317,
+    "stroke_consistency_status": "INCONSISTENT",
+    "power_anomaly_count": 4,
+    "stroke_energy": [
+      {
+        "from": 10,
+        "to": 90,
+        "stroke_pct": 80,
+        "duration_s": 10.13,
+        "avg_power_mw": 399.4,
+        "max_power_mw": 562.5,
+        "energy_mj": 4044.5,
+        "energy_per_degree_mj": 53.22
+      },
+      {
+        "from": 90,
+        "to": 10,
+        "stroke_pct": 80,
+        "duration_s": 16.36,
+        "avg_power_mw": 429.1,
+        "max_power_mw": 603.5,
+        "energy_mj": 7020.7,
+        "energy_per_degree_mj": 92.38
+      },
+      {
+        "from": 25,
+        "to": 75,
+        "stroke_pct": 50,
+        "duration_s": 10.34,
+        "avg_power_mw": 376.8,
+        "max_power_mw": 556.6,
+        "energy_mj": 3894.6,
+        "energy_per_degree_mj": 81.99
+      },
+      {
+        "from": 75,
+        "to": 25,
+        "stroke_pct": 50,
+        "duration_s": 10.26,
+        "avg_power_mw": 438.4,
+        "max_power_mw": 603.5,
+        "energy_mj": 4497.3,
+        "energy_per_degree_mj": 94.68
+      },
+      {
+        "from": 0,
+        "to": 100,
+        "stroke_pct": 100,
+        "duration_s": 20.06,
+        "avg_power_mw": 399.9,
+        "max_power_mw": 584.0,
+        "energy_mj": 8024.2,
+        "energy_per_degree_mj": 84.46
+      },
+      {
+        "from": 100,
+        "to": 0,
+        "stroke_pct": 100,
+        "duration_s": 20.08,
+        "avg_power_mw": 422.0,
+        "max_power_mw": 627.0,
+        "energy_mj": 8474.1,
+        "energy_per_degree_mj": 89.2
+      }
+    ]
+  }
+}

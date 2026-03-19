@@ -1,0 +1,10 @@
+{
+  "experiment": "thermal",
+  "test_number": 1000,
+  "timestamp": "2026-03-19T14:17:16.176275",
+  "n_samples": 714,
+  "rated_torque_nmm": 5000,
+  "duration_min": 3,
+  "pattern": "triangle_continuous",
+  "cycle_period_s": 30
+}
