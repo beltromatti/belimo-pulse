@@ -14,6 +14,23 @@ const productSchema = z.object({
   command_schema: z.array(z.record(z.string(), z.unknown())).default([]),
   sandbox_failure_modes: z.array(z.string()).default([]),
   catalog_basis: z.record(z.string(), z.unknown()).default({}),
+  visualization: z.object({
+    model_id: z.string().min(1),
+    family: z.enum([
+      "belimo_rotary_actuator",
+      "belimo_duct_sensor",
+      "belimo_room_sensor",
+      "rooftop_unit",
+      "central_plant_module",
+    ]),
+    mount_type: z.enum([
+      "duct_shaft_side",
+      "duct_surface_probe",
+      "wall_surface",
+      "equipment_base",
+      "plant_room_pad",
+    ]),
+  }),
   sandbox_notes: z.string().optional(),
 });
 

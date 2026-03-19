@@ -14,13 +14,16 @@ import { Html } from "@react-three/drei/web/Html";
 import {
   BuildingBlueprint,
   DeviceDefinition,
+  ProductDefinition,
   SandboxTickResult,
   TwinSnapshot,
   ZoneTwinState,
 } from "@/lib/runtime-types";
+import { getDeviceModelTransform, RuntimeDeviceModel } from "@/components/runtime-device-models";
 
 type RuntimeSceneProps = {
   blueprint: BuildingBlueprint;
+  products: ProductDefinition[];
   twin: TwinSnapshot | null;
   sandbox: SandboxTickResult | null;
   selectedZoneId: string | null;
@@ -47,6 +50,10 @@ function getRoomCenter(space: BuildingBlueprint["spaces"][number]) {
     0,
     space.layout.origin_m.y + space.layout.size_m.depth / 2,
   );
+}
+
+function getDeviceScenePosition(device: DeviceDefinition) {
+  return new THREE.Vector3(device.layout.position_m.x, device.layout.position_m.z, device.layout.position_m.y);
 }
 
 function getZoneTone(zone: ZoneTwinState | undefined) {
@@ -79,18 +86,6 @@ function getSpaceColor(zone: ZoneTwinState | undefined) {
   }
 
   return "#ebe7dd";
-}
-
-function getDeviceMarkerColor(device: DeviceDefinition) {
-  if (device.kind === "source_equipment") {
-    return "#1f2937";
-  }
-
-  if (device.kind === "sensor") {
-    return "#42b8ff";
-  }
-
-  return "#d9691f";
 }
 
 function RoomBadge({ zone, label, isSelected, isWorstZone }: RoomBadgeProps) {
@@ -199,27 +194,6 @@ function DuctSegment({
   );
 }
 
-function SourceFan({ position }: { position: THREE.Vector3 }) {
-  const fanRef = useRef<THREE.Group | null>(null);
-
-  useFrame(({ clock }) => {
-    if (fanRef.current) {
-      fanRef.current.rotation.y = clock.getElapsedTime() * 2.1;
-    }
-  });
-
-  return (
-    <group ref={fanRef} position={[position.x, position.y + 0.72, position.z]}>
-      {Array.from({ length: 4 }, (_, index) => (
-        <mesh key={index} rotation={[0, (Math.PI / 2) * index, 0]}>
-          <boxGeometry args={[0.08, 0.03, 0.58]} />
-          <meshStandardMaterial color="#111827" metalness={0.2} roughness={0.45} />
-        </mesh>
-      ))}
-    </group>
-  );
-}
-
 function WindowStrip({
   center,
   orientationDeg,
@@ -250,6 +224,7 @@ function WindowStrip({
 
 function RuntimeSceneContent({
   blueprint,
+  products,
   twin,
   sandbox,
   selectedZoneId,
@@ -257,10 +232,13 @@ function RuntimeSceneContent({
   onSelectZone,
 }: RuntimeSceneProps) {
   const twinZones = useMemo(() => new Map((twin?.zones ?? []).map((zone) => [zone.zoneId, zone])), [twin?.zones]);
+  const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
+  const telemetryByDeviceId = useMemo(
+    () => new Map((sandbox?.deviceReadings ?? []).map((reading) => [reading.deviceId, reading])),
+    [sandbox?.deviceReadings],
+  );
   const sourceDevice = blueprint.devices.find((device) => device.kind === "source_equipment");
-  const sourcePoint = sourceDevice
-    ? new THREE.Vector3(sourceDevice.layout.position_m.x, 3.75, sourceDevice.layout.position_m.y)
-    : new THREE.Vector3(10, 3.75, 5);
+  const sourcePoint = sourceDevice ? getDeviceScenePosition(sourceDevice) : new THREE.Vector3(10, 4.8, 5);
   const mode = String(
     sandbox?.deviceReadings.find((reading) => reading.deviceId === "rtu-1")?.telemetry.operating_mode ?? "ventilation",
   );
@@ -271,7 +249,7 @@ function RuntimeSceneContent({
   const trunkY = 3.25;
   const trunkMinZ = Math.min(...centers.map((center) => center.z)) - 0.8;
   const trunkMaxZ = Math.max(...centers.map((center) => center.z)) + 0.8;
-  const trunkFeedStart = new THREE.Vector3(trunkX, 3.55, sourcePoint.z + 0.8);
+  const trunkFeedStart = new THREE.Vector3(trunkX, Math.max(sourcePoint.y - 0.55, trunkY + 0.25), sourcePoint.z + 0.8);
   const trunkFeedEnd = new THREE.Vector3(trunkX, trunkY, sourcePoint.z + 0.8);
 
   const handleRoomClick = (event: ThreeEvent<MouseEvent>, zoneId: string) => {
@@ -315,7 +293,7 @@ function RuntimeSceneContent({
             (device) => device.kind === "actuator" && device.served_space_ids.includes(space.id),
           );
           const branchPoint = branchDevice
-            ? new THREE.Vector3(branchDevice.layout.position_m.x, 3.05, branchDevice.layout.position_m.y)
+            ? getDeviceScenePosition(branchDevice)
             : new THREE.Vector3(center.x, 3.05, center.z);
           const trunkJunction = new THREE.Vector3(trunkX, trunkY, center.z);
           const branchHorizontal = new THREE.Vector3(branchPoint.x, trunkY, center.z);
@@ -423,32 +401,38 @@ function RuntimeSceneContent({
         })}
 
         {blueprint.devices.map((device) => {
-          const markerColor = getDeviceMarkerColor(device);
-          const y = device.kind === "sensor" ? 3.48 : device.kind === "source_equipment" ? 4.4 : 3.12;
+          const product = productById.get(device.product_id);
+
+          if (!product) {
+            throw new Error(`Missing product metadata for device ${device.id}`);
+          }
+
+          const point = getDeviceScenePosition(device);
+          const transform = getDeviceModelTransform(device);
+          const reading = telemetryByDeviceId.get(device.id) ?? null;
 
           return (
-            <group key={device.id} position={[device.layout.position_m.x, y, device.layout.position_m.y]}>
-              <mesh>
-                <sphereGeometry args={[device.kind === "source_equipment" ? 0.14 : 0.08, 16, 16]} />
-                <meshStandardMaterial color={markerColor} emissive={markerColor} emissiveIntensity={0.45} />
-              </mesh>
+            <group
+              key={device.id}
+              position={[
+                point.x + transform.positionOffset[0],
+                point.y + transform.positionOffset[1],
+                point.z + transform.positionOffset[2],
+              ]}
+              rotation={transform.rotation}
+              scale={transform.sceneScale}
+            >
+              <RuntimeDeviceModel productId={product.id} device={device} telemetry={reading?.telemetry ?? null} />
             </group>
           );
         })}
 
-        <RoundedBox args={[2.3, 1.25, 1.5]} radius={0.14} smoothness={4} position={[sourcePoint.x, 3.55, sourcePoint.z]}>
-          <meshStandardMaterial color="#d9691f" metalness={0.18} roughness={0.42} />
-        </RoundedBox>
-        <RoundedBox args={[1.5, 0.2, 0.86]} radius={0.06} smoothness={3} position={[sourcePoint.x, 4.1, sourcePoint.z]}>
-          <meshStandardMaterial color="#f6d0bd" metalness={0.16} roughness={0.48} />
-        </RoundedBox>
-        <SourceFan position={sourcePoint} />
-        <Html position={[sourcePoint.x, 4.5, sourcePoint.z]} transform distanceFactor={12}>
+        <Html position={[sourcePoint.x, sourcePoint.y + 0.95, sourcePoint.z]} transform distanceFactor={12}>
           <div className="rounded-full border border-white/70 bg-white/92 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-800 shadow-[0_10px_24px_rgba(15,23,42,0.12)]">
             RTU-1
           </div>
         </Html>
-        <Html position={[sourcePoint.x, 4.16, sourcePoint.z + 1.1]} transform distanceFactor={12}>
+        <Html position={[sourcePoint.x, sourcePoint.y + 0.6, sourcePoint.z + 1.1]} transform distanceFactor={12}>
           <div className="rounded-full border border-white/60 bg-white/88 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500 shadow-[0_8px_18px_rgba(15,23,42,0.08)]">
             {formatZoneToneLabel(mode)}
           </div>

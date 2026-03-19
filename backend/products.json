@@ -46,6 +46,11 @@
         "small_transfer_damper",
         "diagnostic_reference_actuator"
       ],
+      "visualization": {
+        "model_id": "belimo_lm_series_sample_air_damper_actuator",
+        "family": "belimo_rotary_actuator",
+        "mount_type": "duct_shaft_side"
+      },
       "catalog_basis": {
         "official_specs": {
           "voltage": "AC/DC 24 V",
@@ -191,6 +196,11 @@
         "exhaust_air_damper",
         "economizer_bypass_damper"
       ],
+      "visualization": {
+        "model_id": "belimo_nm24a_mod_air_damper_actuator",
+        "family": "belimo_rotary_actuator",
+        "mount_type": "duct_shaft_side"
+      },
       "catalog_basis": {
         "official_specs": {
           "voltage": "AC/DC 24 V",
@@ -286,6 +296,11 @@
         "high_priority_zone_airflow_control",
         "airflow_measurement_reference"
       ],
+      "visualization": {
+        "model_id": "belimo_nmv_d3_mp_vav_compact",
+        "family": "belimo_rotary_actuator",
+        "mount_type": "duct_shaft_side"
+      },
       "catalog_basis": {
         "official_specs": {
           "voltage": "AC/DC 24 V",
@@ -385,6 +400,11 @@
         "supply_air_temperature",
         "return_air_temperature_reference"
       ],
+      "visualization": {
+        "model_id": "belimo_22dt_12r_duct_temperature_sensor",
+        "family": "belimo_duct_sensor",
+        "mount_type": "duct_surface_probe"
+      },
       "catalog_basis": {
         "official_specs": {
           "voltage": "AC/DC 24 V",
@@ -426,6 +446,11 @@
         "return_air_humidity",
         "latent_load_reference"
       ],
+      "visualization": {
+        "model_id": "belimo_22dth_15m_duct_humidity_temperature_sensor",
+        "family": "belimo_duct_sensor",
+        "mount_type": "duct_surface_probe"
+      },
       "catalog_basis": {
         "official_specs": {
           "voltage": "AC/DC 24 V",
@@ -479,6 +504,11 @@
         "main_supply_static_pressure",
         "duct_airflow_estimation"
       ],
+      "visualization": {
+        "model_id": "belimo_22adp_154k_differential_pressure_sensor",
+        "family": "belimo_duct_sensor",
+        "mount_type": "duct_surface_probe"
+      },
       "catalog_basis": {
         "official_specs": {
           "voltage": "AC/DC 24 V",
@@ -541,6 +571,11 @@
         "room_humidity_feedback",
         "occupancy_proxy_via_co2"
       ],
+      "visualization": {
+        "model_id": "belimo_22rtm_5u00a_room_iaq_sensor",
+        "family": "belimo_room_sensor",
+        "mount_type": "wall_surface"
+      },
       "catalog_basis": {
         "official_specs": {
           "voltage": "AC/DC 24 V",
@@ -606,6 +641,11 @@
         "cooling_source",
         "supply_fan_source"
       ],
+      "visualization": {
+        "model_id": "non_belimo_daikin_rebel_dps_rooftop_heat_pump",
+        "family": "rooftop_unit",
+        "mount_type": "equipment_base"
+      },
       "catalog_basis": {
         "official_specs": {
           "heating_and_cooling": true,
@@ -754,6 +794,11 @@
       "concept_roles": [
         "future_central_plant_cooling_source"
       ],
+      "visualization": {
+        "model_id": "non_belimo_trane_sintesis_rtaf_air_cooled_chiller",
+        "family": "central_plant_module",
+        "mount_type": "plant_room_pad"
+      },
       "catalog_basis": {
         "official_specs": {
           "capacity_range_tons": [
@@ -820,6 +865,11 @@
       "concept_roles": [
         "future_central_plant_heating_source"
       ],
+      "visualization": {
+        "model_id": "non_belimo_viessmann_vitocrossal_200_cm2_boiler",
+        "family": "central_plant_module",
+        "mount_type": "plant_room_pad"
+      },
       "catalog_basis": {
         "official_specs": {
           "rated_input_mbh_single": [

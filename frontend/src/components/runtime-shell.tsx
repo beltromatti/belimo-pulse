@@ -22,6 +22,7 @@ import {
   RuntimeSocketMessage,
   ZoneTwinState,
 } from "@/lib/runtime-types";
+import { InventoryPanel } from "@/components/inventory-panel";
 
 const RuntimeScene = dynamic(
   () => import("@/components/runtime-scene").then((module) => module.RuntimeScene),
@@ -625,6 +626,7 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
             <div className="mt-4">
               <RuntimeScene
                 blueprint={initial.blueprint}
+                products={initial.products}
                 twin={deferredRuntime.twin}
                 sandbox={deferredRuntime.sandbox}
                 selectedZoneId={selectedZoneId}
@@ -669,6 +671,12 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
                 </div>
               </CardBlock>
             </div>
+
+            <InventoryPanel
+              blueprint={initial.blueprint}
+              products={initial.products}
+              sandbox={deferredRuntime.sandbox}
+            />
           </section>
 
           <aside className="glass-panel flex flex-col gap-4 p-4">

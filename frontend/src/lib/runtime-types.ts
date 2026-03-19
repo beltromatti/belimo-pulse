@@ -14,6 +14,24 @@ export type ProductDefinition = {
   brand: string;
   category: string;
   subtype: string;
+  official_reference_models: string[];
+  concept_roles: string[];
+  catalog_basis: Record<string, unknown>;
+  visualization: {
+    model_id: string;
+    family:
+      | "belimo_rotary_actuator"
+      | "belimo_duct_sensor"
+      | "belimo_room_sensor"
+      | "rooftop_unit"
+      | "central_plant_module";
+    mount_type:
+      | "duct_shaft_side"
+      | "duct_surface_probe"
+      | "wall_surface"
+      | "equipment_base"
+      | "plant_room_pad";
+  };
 };
 
 export type BlueprintSurface = {
