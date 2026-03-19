@@ -1,5 +1,5 @@
 """
-ActuatorIQ — AI Agent
+Belimo Pulse AI — AI Agent
 ======================
 Chat interface that uses Claude API with MCP tools to diagnose actuators.
 Can be used standalone (CLI) or imported by the Streamlit dashboard.
@@ -31,48 +31,76 @@ from mcp_server import (
     auto_commission,
     predict_degradation,
     run_install_verify,
+    run_fresh_diagnosis,
+    run_targeted_sweep,
+    run_frequency_probe,
+    run_step_test,
+    read_telemetry_stream,
+    detect_anomalies,
+    get_torque_at_position,
 )
 
 SYSTEM_PROMPT = """\
-You are ActuatorIQ, an AI diagnostic system for Belimo HVAC actuators.
+You are Belimo Pulse AI, a diagnostic system for Belimo HVAC actuators connected to real hardware.
 
-You operate across three lifecycle protocols:
+## CRITICAL RULES — NO HALLUCINATION
+- ONLY state facts that come directly from tool results. Never invent numbers.
+- Clearly separate MEASURED values (from experiments) from DERIVED values (computed from measurements).
+- If you don't have data for something, say "not measured" — never guess.
+- Every number you cite must trace back to a specific tool call in this conversation.
 
-PROTOCOL 1 — INSTALL VERIFY (for installers)
-Run a 2-minute sweep after mounting. Output: pass/fail card with sizing, linkage, friction.
-Use run_install_verify() or get_health_report() + auto_commission().
+## WHAT YOU MEASURE vs WHAT YOU DERIVE
+MEASURED (from physical actuator via experiments):
+- Torque at each position (Nmm) — from sweep
+- Position tracking error (%) — from hunting test
+- Overshoot (%) — from hunting test
+- Resonance frequency (Hz) — from FFT on hunting data
+- Transit time (seconds) — from step response
+- Power draw (mW) — from electronics test
+- Temperature (°C) — from telemetry
+- Friction smoothness score — from torque variance across position bins
+- Dead band (%) — from linkage analysis
 
-PROTOCOL 2 — COMMISSION TUNE (for engineers)
-Analyze hunting risk and generate optimal PI controller settings.
-Use auto_commission() to get recommended Kp, Ti, slew rate, position limits.
+DERIVED (computed from measurements, clearly label as estimates):
+- Position limits — derived from dead zone detection in friction map
+- Max slew rate — derived from resonance frequency (rule: stay below 1/3 of resonance)
+- Recommended PI bandwidth — derived from resonance (cannot be validated without full HVAC loop)
+- Energy waste estimates — modeled from hunting score, NOT measured
+- Maintenance forecasts — extrapolated from torque trending
 
-PROTOCOL 3 — CONTINUOUS WATCH (for facility managers)
-Compare sweep profiles over time to detect degradation.
-Use predict_degradation() to forecast valve service dates and remaining life.
+Always say "Based on measured resonance at X Hz, the recommended maximum control bandwidth is Y Hz"
+NOT "The optimal PI gains are Kp=0.33, Ti=120s" — we cannot determine exact PI gains without a real control loop, room, and valve.
 
-You have tools to:
-- Read live telemetry from a physical Belimo LM actuator via InfluxDB
-- Run diagnostic sweeps and analysis algorithms
-- Generate commissioning parameters (PI gains, position limits, slew rates)
-- Predict degradation and forecast maintenance needs
-- Physically move the actuator by sending setpoint commands
-- Estimate energy waste and maintenance savings in CHF/year
+## ANOMALY INVESTIGATION PROTOCOL
+When you detect something unusual in the data:
+1. Flag it: "Anomaly detected: [what] at [where] — [measured value] vs [expected]"
+2. Investigate: Run a targeted test to confirm. Use run_targeted_sweep() to zoom into the anomaly zone.
+3. Confirm or dismiss: "Confirmed: friction spike at 45-55% — torque 2.1x baseline" or "False alarm: within normal variance"
+4. Recommend: Specific action based on confirmed finding
 
-When diagnosing:
-1. Start by reading the health report to understand the current state
-2. Identify the most critical finding and explain what it means practically
-3. Quantify business impact when relevant (energy waste, maintenance costs)
-4. Give specific, actionable recommendations — not generic advice
+Example chain:
+- get_health_report() shows friction anomaly at 50%
+- run_targeted_sweep(start=40, end=60, steps=20) to map that zone precisely
+- run_step_test(from_pct=45, to_pct=55) to test dynamics in the anomaly zone
+- Result: "Confirmed binding at 48-52%. Torque peaks at 3.2 Nmm (4.6x baseline). Likely valve packing issue."
 
-You speak like a senior HVAC engineer presenting to a building owner or installer:
-- Concise, direct, no jargon without explanation
-- Always reference actual data values from the tools
-- Quantify impact in CHF/year when possible
-- If something is fine, say so briefly and move to what matters
+## THREE LIFECYCLE PROTOCOLS
 
-Context: This actuator is on a demo rig at START Hack 2026 (unloaded — no valve attached).
-The diagnostic data is real, collected from a physical Belimo LM series actuator.
-Rated torque: 5000 Nmm. The actuator is connected via InfluxDB on a Raspberry Pi.
+INSTALL VERIFY (2 min): run_fresh_diagnosis() or run_quick_sweep() + analyze_sweep()
+→ Output: pass/fail + what the installer should fix before leaving
+
+COMMISSION TUNE (5 min): auto_commission() + run_frequency_probe() at key frequencies
+→ Output: measured operating envelope (position limits, max slew rate, resonance frequency)
+→ NOT exact PI gains — those depend on the building's control loop which we cannot test
+
+CONTINUOUS WATCH (passive): predict_degradation() + compare_profiles()
+→ Output: degradation rate, forecast service date, friction trend
+
+## CONTEXT
+Physical Belimo LM actuator on a demo rig (unloaded — no valve attached).
+Connected via InfluxDB on Raspberry Pi (192.168.3.14:8086).
+Rated torque: 5000 Nmm. All experiment data is real, from this physical actuator.
+The actuator is unloaded so torque values reflect internal motor friction only (~0.7-1.3 Nmm).
 """
 
 TOOLS = [
@@ -188,6 +216,121 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "auto_commission",
+        "description": "Generate optimal commissioning parameters: position limits, PI gains (Kp, Ti), max slew rate, dead band compensation. The AI prescribes, not just diagnoses.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rated_torque": {"type": "number", "default": 5000, "description": "Rated torque Nmm (5000=LM, 1000=CQ)"},
+            },
+        },
+    },
+    {
+        "name": "predict_degradation",
+        "description": "Predict actuator and valve degradation by comparing two sweeps. Forecasts remaining life, valve service dates, and friction pattern changes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "baseline_test": {"type": "integer", "default": 100},
+                "current_test": {"type": "integer", "default": 400},
+                "months_between": {"type": "number", "default": 6, "description": "Months between the two sweeps"},
+                "rated_torque": {"type": "number", "default": 5000},
+            },
+        },
+    },
+    {
+        "name": "run_install_verify",
+        "description": "Run the complete Install Verify protocol — 2-minute automated sweep + analysis + commissioning card. Returns pass/fail for the installer.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "run_fresh_diagnosis",
+        "description": "Run a COMPLETE fresh diagnosis from scratch on the LIVE actuator: physically sweep it, analyze the raw data, generate commissioning parameters — all in one call. Takes ~2-3 min. Use when user wants fresh data with NO cached results.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "test_number": {"type": "integer", "default": 950},
+                "rated_torque": {"type": "number", "default": 5000},
+            },
+        },
+    },
+    {
+        "name": "run_targeted_sweep",
+        "description": "Run a sweep over a SPECIFIC position range to investigate an anomaly. Use when you detect unusual torque/friction at a position and want to zoom in. The actuator physically moves through only the specified range.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_pct": {"type": "number", "description": "Start position (0-100)"},
+                "end_pct": {"type": "number", "description": "End position (0-100)"},
+                "steps": {"type": "integer", "default": 20, "description": "Number of measurement steps"},
+                "test_number": {"type": "integer", "default": 960},
+            },
+            "required": ["start_pct", "end_pct"],
+        },
+    },
+    {
+        "name": "run_frequency_probe",
+        "description": "Test the actuator at a SPECIFIC frequency to measure tracking ability. Use to confirm hunting risk at a suspected resonance frequency. Oscillates the actuator around 50% at the given frequency.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "frequency_hz": {"type": "number", "description": "Frequency to test (e.g. 0.05)"},
+                "amplitude_pct": {"type": "number", "default": 15, "description": "Oscillation amplitude in %"},
+                "duration_s": {"type": "number", "default": 60, "description": "Test duration in seconds"},
+                "test_number": {"type": "integer", "default": 970},
+            },
+            "required": ["frequency_hz"],
+        },
+    },
+    {
+        "name": "run_step_test",
+        "description": "Run a single step response test between two positions. Measures transit time, overshoot, and settling time for that specific move. Use to test dynamics in a specific range.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "from_pct": {"type": "number", "description": "Starting position (0-100)"},
+                "to_pct": {"type": "number", "description": "Target position (0-100)"},
+                "hold_s": {"type": "number", "default": 10, "description": "Seconds to hold at target"},
+                "test_number": {"type": "integer", "default": 980},
+            },
+            "required": ["from_pct", "to_pct"],
+        },
+    },
+    {
+        "name": "read_telemetry_stream",
+        "description": "Read continuous telemetry for a duration. Returns all samples collected during the window. Use to observe actuator behavior during operation or after a command.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "duration_s": {"type": "number", "default": 10, "description": "Seconds to collect data"},
+                "sample_interval": {"type": "number", "default": 0.3, "description": "Seconds between samples"},
+            },
+        },
+    },
+    {
+        "name": "detect_anomalies",
+        "description": "Scan the latest health report for anomalies that warrant investigation. Returns a list of findings with suggested follow-up experiments. Use this as the FIRST step before investigating.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "get_torque_at_position",
+        "description": "Get torque statistics at a specific position range from the latest sweep data. Returns mean, max, std, and sample count for that zone.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "position_center": {"type": "number", "description": "Center position (0-100)"},
+                "window_pct": {"type": "number", "default": 10, "description": "Window width in % (e.g. 10 = +/-5%)"},
+            },
+            "required": ["position_center"],
+        },
+    },
 ]
 
 TOOL_FUNCTIONS = {
@@ -203,6 +346,16 @@ TOOL_FUNCTIONS = {
     "estimate_energy_waste": estimate_energy_waste,
     "estimate_maintenance_savings": estimate_maintenance_savings,
     "compare_profiles": compare_profiles,
+    "auto_commission": auto_commission,
+    "predict_degradation": predict_degradation,
+    "run_install_verify": run_install_verify,
+    "run_fresh_diagnosis": run_fresh_diagnosis,
+    "run_targeted_sweep": run_targeted_sweep,
+    "run_frequency_probe": run_frequency_probe,
+    "run_step_test": run_step_test,
+    "read_telemetry_stream": read_telemetry_stream,
+    "detect_anomalies": detect_anomalies,
+    "get_torque_at_position": get_torque_at_position,
 }
 
 
@@ -220,7 +373,7 @@ def chat(
     user_message: str,
     history: list | None = None,
     on_tool_call: callable = None,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-opus-4-20250514",
 ) -> tuple[str, list]:
     """Send a message, handle tool calls, return (response_text, updated_history).
 
@@ -303,11 +456,11 @@ def main():
         msg = " ".join(sys.argv[1:])
         print(f"\n  You: {msg}\n")
         response, history = chat(msg, history, on_tool_call=on_tool)
-        print(f"\n  ActuatorIQ: {response}\n")
+        print(f"\n  Belimo Pulse AI: {response}\n")
         return
 
     # Interactive mode
-    print("\n  ActuatorIQ — AI Actuator Diagnostics")
+    print("\n  Belimo Pulse AI — AI Actuator Diagnostics")
     print("  Type your question. Ctrl+C to exit.\n")
 
     while True:
@@ -317,7 +470,7 @@ def main():
                 continue
             print()
             response, history = chat(msg, history, on_tool_call=on_tool)
-            print(f"\n  ActuatorIQ: {response}\n")
+            print(f"\n  Belimo Pulse AI: {response}\n")
         except (KeyboardInterrupt, EOFError):
             print("\n  Goodbye.\n")
             break

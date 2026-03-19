@@ -81,34 +81,58 @@ All commands use **epoch timestamp** (`1970-01-01T00:00:00Z`) to avoid clock syn
 
 ### Layer 2: AI Agent System (`backend/mcp/`)
 
-**MCP Server** (`mcp_server.py`) — 12 tools exposed via FastMCP:
+**MCP Server** (`mcp_server.py`) — **15 tools** exposed via FastMCP, organized by lifecycle protocol:
 
-| Tool | Type | What it does |
-|------|------|-------------|
-| `read_telemetry(n)` | Read | Live sensor data from Pi via InfluxDB |
-| `get_health_report()` | Read | Returns `report_v2.json` — the pre-computed diagnostics |
-| `get_electronics_report()` | Read | Returns electronics experiment report |
-| `list_experiments()` | Read | Lists available CSV/JSON files |
-| `get_experiment_data(filename, head)` | Read | Loads a specific CSV as JSON |
-| `analyze_sweep(csv_filename)` | Analysis | Runs all 5 diagnostics on a sweep CSV |
-| `analyze_hunting(csv_filename)` | Analysis | Runs hunting risk analysis |
-| `move_actuator(position, test_number)` | Control | **Physically moves the actuator** |
-| `run_quick_sweep(test_number)` | Control | Runs a fast 2-min sweep (1 repeat, 25 steps) |
-| `estimate_energy_waste(hunting_score, ...)` | Advisory | Computes CHF/year from hunting |
-| `estimate_maintenance_savings(health_score, ...)` | Advisory | Predictive maintenance ROI |
-| `compare_profiles(baseline_test, current_test)` | Advisory | Torque drift between two sweeps |
+**Protocol 1: Install Verify** (for installers — 2 min)
+| Tool | What it does |
+|------|-------------|
+| `run_install_verify()` | Full automated protocol: sweep → analyze → commission card → pass/fail |
+| `analyze_sweep(csv_filename)` | Runs all 5 diagnostics on a sweep CSV |
+| `get_health_report()` | Returns pre-computed diagnostics from `report_v2.json` |
 
-**Agent** (`agent.py`) — Claude API with tool_use. Chains tools autonomously:
+**Protocol 2: Commission Tune** (for engineers — 5 min)
+| Tool | What it does |
+|------|-------------|
+| `auto_commission(rated_torque)` | **Generates optimal PI gains (Kp, Ti), position limits, max slew rate, dead band compensation** |
+| `analyze_hunting(csv_filename)` | Hunting risk analysis with per-frequency breakdown |
+| `move_actuator(position, test_number)` | **Physically moves the actuator** |
+| `run_quick_sweep(test_number)` | Fast 2-min diagnostic sweep (1 repeat, 25 steps) |
+
+**Protocol 3: Continuous Watch** (for facility managers — passive)
+| Tool | What it does |
+|------|-------------|
+| `predict_degradation(baseline, current, months)` | **Forecasts valve service dates, friction trends, remaining life** |
+| `compare_profiles(baseline_test, current_test)` | Torque drift and per-position friction comparison |
+| `estimate_energy_waste(hunting_score, ...)` | Annual CHF waste from hunting |
+| `estimate_maintenance_savings(health_score, ...)` | Predictive maintenance ROI |
+
+**Core Data Tools**
+| Tool | What it does |
+|------|-------------|
+| `read_telemetry(n)` | Live sensor data from Pi via InfluxDB |
+| `get_electronics_report()` | Electronics experiment report (power map, consistency) |
+| `list_experiments()` | Lists available CSV/JSON files |
+| `get_experiment_data(filename, head)` | Loads a specific CSV as JSON |
+
+**Key difference from v1:** The agent now **prescribes actions**, not just reports problems:
+- `auto_commission` outputs: "Use Kp=0.33, Ti=120s, max slew 2.5%/s" (not "hunting risk is moderate")
+- `predict_degradation` outputs: "Inspect valve at 60-70% by Sep 2026" (not "friction increased 61%")
+- `run_install_verify` outputs: "PASS — ready for commissioning" (not raw data)
+
+**Agent** (`agent.py`) — Claude API with tool_use. System prompt now references three lifecycle protocols. Chains tools autonomously:
 ```
-User: "Check this actuator's health"
-Agent: calls get_health_report() → read_telemetry() → responds with diagnosis
+User: "Generate commissioning parameters"
+Agent: calls auto_commission() → "Use Kp=0.33, Ti=120s, limit slew to 2.5%/s"
+
+User: "When will this actuator need maintenance?"
+Agent: calls predict_degradation() → "Friction spike at 60-70%. Inspect by Sep 2026."
 ```
 
 **Dashboard** (`dashboard.py`) — Streamlit UI with:
-- Dark theme, gradient hero, JetBrains Mono
+- Dark theme, gradient hero, JetBrains Mono fonts
 - Chat interface with visible tool call chain
 - Sidebar: health score ring, diagnostic pills, score breakdown bars, live telemetry
-- Auto-renders charts (friction map, hunting frequency response) when relevant
+- Auto-renders Altair charts (friction map, hunting frequency response) when relevant
 - Quick action buttons: Health Check, Compare Profiles, Cost Analysis, Move Actuator
 
 ### Layer 3: Web Deployment (not the main focus)
@@ -196,15 +220,17 @@ Pi WiFi has no internet. You need both Pi access AND internet (for Claude API) o
                │ calls tools
                ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  MCP SERVER (mcp_server.py) — 12 tools via FastMCP               │
+│  MCP SERVER (mcp_server.py) — 15 tools via FastMCP               │
 │                                                                   │
-│  READ           ANALYSIS        CONTROL         ADVISORY          │
-│  ─────          ────────        ───────         ────────          │
-│  read_telemetry analyze_sweep   move_actuator   estimate_waste    │
-│  get_report     analyze_hunting run_quick_sweep estimate_savings  │
-│  get_electronics                                compare_profiles  │
-│  list_experiments                                                 │
-│  get_experiment_data                                              │
+│  INSTALL VERIFY    COMMISSION TUNE    CONTINUOUS WATCH             │
+│  ──────────────    ──────────────     ────────────────             │
+│  run_install_verify auto_commission   predict_degradation          │
+│  analyze_sweep     analyze_hunting    compare_profiles             │
+│  get_health_report move_actuator      estimate_energy_waste        │
+│                    run_quick_sweep    estimate_maintenance_savings  │
+│                                                                   │
+│  CORE: read_telemetry, get_electronics_report,                    │
+│        list_experiments, get_experiment_data                       │
 └──────┬───────────────────────────┬───────────────────────────────┘
        │ reads CSVs/JSON           │ InfluxDB queries/writes
        ▼                           ▼
@@ -228,31 +254,54 @@ Pi WiFi has no internet. You need both Pi access AND internet (for Claude API) o
 
 ---
 
-## What Still Needs to Be Built
+## The Product Concept
 
-### Priority 1: Live Demo Polish
-- Connect to Pi WiFi + phone tethering so dashboard has live data
-- Run one more sweep during demo to show real-time data streaming
-- The "move actuator" command during demo is the wow moment — judges see it move
+**"Your actuator already knows. Now you can listen."**
 
-### Priority 2: Faulty Comparison Demo
+Every Belimo actuator already measures torque, position, power, and temperature. These signals contain a diagnostic picture of the valve, the control loop, and the actuator itself. ActuatorIQ extracts this through three protocols:
+
+| Protocol | Who | Time | What It Does | Key Tool |
+|----------|-----|------|-------------|----------|
+| **Install Verify** | Installer | 2 min | Sweep → pass/fail card (sizing, linkage, friction) | `run_install_verify()` |
+| **Commission Tune** | Engineer | 5 min | Hunting test → PI gains, position limits, slew rate | `auto_commission()` |
+| **Continuous Watch** | Facility Mgr | Passive | Compare sweeps → degradation forecast, service dates | `predict_degradation()` |
+
+**The key insight the judges should hear:** The actuator is a diagnostic probe for the **entire HVAC system** — valve health (torque trending), controller quality (hunting detection), and its own electronics (power analysis) — disguised as a simple motor.
+
+---
+
+## What Still Needs to Be Done
+
+### Priority 1: Live Demo Connection
+- Get both Pi access AND internet on one laptop (phone USB tethering or Ethernet to Pi)
+- Verify: `curl http://192.168.3.14:8086/health` works while internet also works
+- Then the dashboard talks to the actuator AND Claude API simultaneously
+
+### Priority 2: Faulty Comparison Demo (THE MONEY SHOT)
 - Run a sweep while physically resisting the actuator shaft at ~50% position
 - This creates a "faulty" profile with high friction/torque anomalies
-- Compare healthy vs faulty in the dashboard — this is the money shot
 - Command: `python experiments.py --experiment sweep --test-number 700` (while holding shaft)
+- Then ask the agent: "Compare baseline to current — what changed?"
+- The visual contrast between healthy and faulty torque curves is the entire presentation
 
-### Priority 3: Presentation
-- The live demo IS the presentation
-- Demo script (3 turns, ~3 minutes):
-  - Turn 1: "Check this actuator's health" → AI diagnoses
-  - Turn 2: "Move the actuator to 75% and back" → actuator physically moves
-  - Turn 3: "What would this cost a building owner?" → CHF/year impact
-- Have slides as backup with: Problem → Solution → Technical Approach → Business Case
+### Priority 3: Presentation (5 slides + live demo)
+- **Slide 1:** Problem — 70% of valves hunt, installers have zero feedback, $5.2B/yr industry waste
+- **Slide 2:** Solution — ActuatorIQ: 3 protocols across the actuator lifecycle
+- **Slide 3:** Live Demo — 3 turns:
+  - "Run install verify" → AI sweeps actuator, returns pass/fail + commissioning card
+  - "Move actuator to 75%" → judges watch it move on the table
+  - "What does this cost a building?" → CHF 8,871/year savings
+- **Slide 4:** Business Case — CHF 8,871/building/year × scale
+- **Slide 5:** Vision — every Belimo actuator ships with ActuatorIQ built in
 
 ### Priority 4: Electronics Integration
 - `experiment_electronics.py` was redesigned with power map (Phase 2) and stroke consistency (Phase 3)
 - Run it: `python experiment_electronics.py --test-number 500`
 - The report gets picked up by `get_electronics_report()` MCP tool automatically
+
+### Priority 5: Dashboard Quick Actions Update
+- Add buttons for the three protocols: "Install Verify", "Commission Tune", "Predict Degradation"
+- These map directly to the new tools
 
 ---
 
