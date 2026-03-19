@@ -8,6 +8,7 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY products.json ./
 COPY blueprints ./blueprints
+COPY scripts ./scripts
 COPY src ./src
 
 RUN npm run build
