@@ -85,11 +85,27 @@ jobs:
           chmod 600 "$HOME/.ssh/belimo"
           ssh-keyscan -H "$AWS_EC2_HOST" >> "$HOME/.ssh/known_hosts"
 
+      - name: Materialize backend env file
+        env:
+          BACKEND_ENV_FILE_B64: ${{ secrets.BACKEND_ENV_FILE_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$BACKEND_ENV_FILE_B64"
+          printf '%s' "$BACKEND_ENV_FILE_B64" | base64 --decode > "$RUNNER_TEMP/backend.env.base"
+          test -s "$RUNNER_TEMP/backend.env.base"
+
+      - name: Upload backend env file
+        env:
+          AWS_EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
+          AWS_EC2_USER: ${{ secrets.AWS_EC2_USER }}
+        run: |
+          set -euo pipefail
+          scp -i "$HOME/.ssh/belimo" "$RUNNER_TEMP/backend.env.base" "${AWS_EC2_USER}@${AWS_EC2_HOST}:/tmp/backend.env.base"
+
       - name: Deploy backend on EC2
         env:
           AWS_EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
           AWS_EC2_USER: ${{ secrets.AWS_EC2_USER }}
-          BACKEND_ENV_FILE_B64: ${{ secrets.BACKEND_ENV_FILE_B64 }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           GHCR_USERNAME: ${{ needs.build_image.outputs.ghcr_username }}
           IMAGE_REF: ${{ needs.build_image.outputs.image_ref }}
@@ -97,7 +113,7 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i "$HOME/.ssh/belimo" "${AWS_EC2_USER}@${AWS_EC2_HOST}" \
-            "BACKEND_ENV_FILE_B64='${BACKEND_ENV_FILE_B64}' GHCR_PULL_TOKEN='${GHCR_PULL_TOKEN}' GHCR_USERNAME='${GHCR_USERNAME}' IMAGE_REF='${IMAGE_REF}' IMAGE_REPOSITORY='${IMAGE_REPOSITORY}' bash -s" <<'EOF'
+            "GHCR_PULL_TOKEN='${GHCR_PULL_TOKEN}' GHCR_USERNAME='${GHCR_USERNAME}' IMAGE_REF='${IMAGE_REF}' IMAGE_REPOSITORY='${IMAGE_REPOSITORY}' bash -s" <<'EOF'
           set -euo pipefail
           sudo install -d -m 755 /opt/belimo-pulse/backend
           sudo install -d -m 755 /opt/belimo-pulse/postgres
@@ -114,7 +130,8 @@ jobs:
           }
           CADDYFILE
 
-          printf '%s' "$BACKEND_ENV_FILE_B64" | base64 -d | sudo tee /opt/belimo-pulse/backend/.env.base >/dev/null
+          sudo install -m 600 /tmp/backend.env.base /opt/belimo-pulse/backend/.env.base
+          rm -f /tmp/backend.env.base
           sudo test -s /opt/belimo-pulse/postgres/postgres.env
           sudo sh -c '
             set -a
