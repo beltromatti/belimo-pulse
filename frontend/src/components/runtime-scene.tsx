@@ -29,6 +29,7 @@ type RuntimeSceneProps = {
   onSelectZone: (zoneId: string) => void;
   totalAirflowM3H: number;
   sourcePowerKw: number;
+  onReturnToPortfolio?: () => void;
 };
 
 type RuntimeSceneContentProps = RuntimeSceneProps & {
@@ -781,8 +782,24 @@ export function RuntimeScene(props: RuntimeSceneProps) {
     <div className="relative h-[100svh] min-h-[720px] w-full overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.92),rgba(224,232,240,0.75)_42%,rgba(199,211,224,0.96)_100%)]">
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-32 bg-gradient-to-b from-white/55 to-transparent" />
       <div className="pointer-events-none absolute inset-x-4 top-4 z-10 sm:inset-x-6 sm:top-5">
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-full border border-white/55 bg-white/62 px-4 py-3 text-slate-600 backdrop-blur">
-          <BrandLockup />
+        <div className="relative flex flex-wrap items-center justify-between gap-3 rounded-full border border-white/55 bg-white/62 px-4 py-3 text-slate-600 backdrop-blur">
+          <div className="pointer-events-auto flex items-center gap-3">
+            <BrandLockup />
+          </div>
+          <div className="pointer-events-none absolute inset-x-0 top-1/2 hidden -translate-y-1/2 justify-center lg:flex">
+            <div className="pointer-events-auto inline-flex items-center gap-3 px-3 py-2">
+              <span className="text-sm font-medium tracking-[-0.02em] text-slate-800">{props.blueprint.building.name}</span>
+              {props.onReturnToPortfolio ? (
+                <button
+                  type="button"
+                  onClick={props.onReturnToPortfolio}
+                  className="rounded-full border border-slate-200/80 bg-white px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500 transition hover:border-slate-300 hover:text-slate-700"
+                >
+                  Change
+                </button>
+              ) : null}
+            </div>
+          </div>
           <div className="flex flex-wrap items-center justify-end gap-3 text-slate-950">
             <div
               className="flex items-center gap-2"

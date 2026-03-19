@@ -39,6 +39,7 @@ type RuntimeShellProps = {
   initialBrainAlerts?: BrainAlert[];
   initialBrainPolicies?: OperatorPolicy[];
   websocketUrl: string;
+  onReturnToPortfolio?: () => void;
 };
 
 type RuntimeState = {
@@ -149,7 +150,13 @@ function getOperationalNarrative({
   return statements;
 }
 
-export function RuntimeShell({ initial, initialBrainAlerts, initialBrainPolicies, websocketUrl }: RuntimeShellProps) {
+export function RuntimeShell({
+  initial,
+  initialBrainAlerts,
+  initialBrainPolicies,
+  websocketUrl,
+  onReturnToPortfolio,
+}: RuntimeShellProps) {
   const [runtime, setRuntime] = useState<RuntimeState>({
     twin: initial.latestTwinSnapshot,
     sandbox: initial.latestSandboxBatch,
@@ -747,6 +754,7 @@ export function RuntimeShell({ initial, initialBrainAlerts, initialBrainPolicies
                 onSelectZone={setSelectedZoneId}
                 totalAirflowM3H={totalAirflow}
                 sourcePowerKw={sourcePower}
+                onReturnToPortfolio={onReturnToPortfolio}
               />
             </div>
 
