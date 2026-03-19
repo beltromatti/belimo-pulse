@@ -1,15 +1,11 @@
 "use client";
 
-import {
-  OrbitControls,
-} from "@react-three/drei/core/OrbitControls";
-import {
-  RoundedBox,
-} from "@react-three/drei/core/RoundedBox";
-import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
-import { useMemo, useRef } from "react";
-import * as THREE from "three";
+import { OrbitControls } from "@react-three/drei/core/OrbitControls";
+import { RoundedBox } from "@react-three/drei/core/RoundedBox";
 import { Html } from "@react-three/drei/web/Html";
+import { Canvas, ThreeEvent, useFrame } from "@react-three/fiber";
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as THREE from "three";
 
 import {
   BuildingBlueprint,
@@ -32,6 +28,11 @@ type RuntimeSceneProps = {
   onSelectZone: (zoneId: string) => void;
 };
 
+type RuntimeSceneContentProps = RuntimeSceneProps & {
+  autoRotateActive: boolean;
+  controlsRef: { current: import("three-stdlib").OrbitControls | null };
+};
+
 type RoomBadgeProps = {
   zone: ZoneTwinState | undefined;
   label: string;
@@ -44,6 +45,10 @@ type FlowRouteProps = {
   color: string;
   intensity: number;
 };
+
+const LOCKED_POLAR_ANGLE = 0.96;
+const AUTO_ROTATE_IDLE_DELAY_MS = 5000;
+const AUTO_ROTATE_SPEED = 0.45;
 
 function getRoomCenter(space: BuildingBlueprint["spaces"][number]) {
   return new THREE.Vector3(
@@ -99,21 +104,65 @@ function RoomBadge({ zone, label, isSelected, isWorstZone }: RoomBadgeProps) {
       <div className="flex items-center justify-between gap-3">
         <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">{label}</p>
         <span className="flex items-center gap-2">
-          {isWorstZone ? <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700">focus</span> : null}
+          {isWorstZone ? (
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+              focus
+            </span>
+          ) : null}
           <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: getZoneTone(zone) }} />
         </span>
       </div>
       <div className="mt-2 flex items-end justify-between gap-4">
         <div>
-          <p className="text-xl font-semibold leading-none text-slate-950">{zone ? `${zone.temperatureC.toFixed(1)}°` : "--"}</p>
+          <p className="text-xl font-semibold leading-none text-slate-950">
+            {zone ? `${zone.temperatureC.toFixed(1)} deg` : "--"}
+          </p>
           {isSelected ? (
-            <p className="mt-1 text-xs text-slate-600">{zone ? `${zone.co2Ppm.toFixed(0)} ppm · ${zone.supplyAirflowM3H.toFixed(0)} m³/h` : "No data"}</p>
+            <p className="mt-1 text-xs text-slate-600">
+              {zone ? `${zone.co2Ppm.toFixed(0)} ppm | ${zone.supplyAirflowM3H.toFixed(0)} m3/h` : "No data"}
+            </p>
           ) : (
-            <p className="mt-1 text-xs text-slate-600">{zone ? `${zone.comfortScore.toFixed(0)}% comfort` : "No data"}</p>
+            <p className="mt-1 text-xs text-slate-600">
+              {zone ? `${zone.comfortScore.toFixed(0)}% comfort` : "No data"}
+            </p>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+function FloatingRoomBadge({
+  position,
+  zone,
+  label,
+  isSelected,
+  isWorstZone,
+}: {
+  position: [number, number, number];
+  zone: ZoneTwinState | undefined;
+  label: string;
+  isSelected: boolean;
+  isWorstZone: boolean;
+}) {
+  const groupRef = useRef<THREE.Group | null>(null);
+  const baseY = position[1];
+  const phase = useMemo(() => position[0] * 0.11 + position[2] * 0.07, [position]);
+
+  useFrame(({ clock }) => {
+    if (!groupRef.current) {
+      return;
+    }
+
+    groupRef.current.position.y = baseY + Math.sin(clock.getElapsedTime() * 1.2 + phase) * 0.06;
+  });
+
+  return (
+    <group ref={groupRef} position={position}>
+      <Html transform sprite distanceFactor={11}>
+        <RoomBadge zone={zone} label={label} isSelected={isSelected} isWorstZone={isWorstZone} />
+      </Html>
+    </group>
   );
 }
 
@@ -356,7 +405,9 @@ function RuntimeSceneContent({
   selectedZoneId,
   worstZoneId,
   onSelectZone,
-}: RuntimeSceneProps) {
+  autoRotateActive,
+  controlsRef,
+}: RuntimeSceneContentProps) {
   const twinZones = useMemo(() => new Map((twin?.zones ?? []).map((zone) => [zone.zoneId, zone])), [twin?.zones]);
   const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const telemetryByDeviceId = useMemo(
@@ -375,6 +426,22 @@ function RuntimeSceneContent({
   const flowColor = mode === "heating" ? "#ff7a45" : mode === "cooling" || mode === "economizer" ? "#42b8ff" : "#7dd3fc";
   const ductColor = mode === "heating" ? "#d9b7a6" : "#c7d5e3";
   const centers = blueprint.spaces.map((space) => getRoomCenter(space));
+  const sceneCenter = useMemo(() => {
+    if (blueprint.spaces.length === 0) {
+      return new THREE.Vector3(0, 0, 0);
+    }
+
+    const minX = Math.min(...blueprint.spaces.map((space) => space.layout.origin_m.x));
+    const maxX = Math.max(
+      ...blueprint.spaces.map((space) => space.layout.origin_m.x + space.layout.size_m.width),
+    );
+    const minZ = Math.min(...blueprint.spaces.map((space) => space.layout.origin_m.y));
+    const maxZ = Math.max(
+      ...blueprint.spaces.map((space) => space.layout.origin_m.y + space.layout.size_m.depth),
+    );
+
+    return new THREE.Vector3((minX + maxX) / 2, 1.6, (minZ + maxZ) / 2);
+  }, [blueprint.spaces]);
   const trunkX = sourcePoint.x;
   const trunkY = 3.25;
   const trunkMinZ = Math.min(...centers.map((center) => center.z)) - 0.8;
@@ -387,17 +454,42 @@ function RuntimeSceneContent({
     onSelectZone(zoneId);
   };
 
+  useEffect(() => {
+    const controls = controlsRef.current;
+
+    if (!controls) {
+      return;
+    }
+
+    controls.target.set(0, sceneCenter.y, 0);
+    controls.update();
+  }, [controlsRef, sceneCenter]);
+
   return (
     <>
       <color attach="background" args={["#d9e4ee"]} />
       <fog attach="fog" args={["#d9e4ee", 18, 48]} />
-      <ambientLight intensity={1.35} />
-      <hemisphereLight intensity={1.2} color="#f8fafc" groundColor="#c8d4e0" />
-      <directionalLight position={[8, 18, 10]} intensity={2.0} />
+      <ambientLight intensity={1.45} />
+      <hemisphereLight intensity={1.25} color="#f8fafc" groundColor="#c8d4e0" />
+      <directionalLight position={[8, 18, 10]} intensity={2.1} />
       <directionalLight position={[-6, 12, -8]} intensity={0.4} color="#fef3c7" />
-      <OrbitControls enablePan={false} minPolarAngle={0.8} maxPolarAngle={1.08} minAzimuthAngle={-0.92} maxAzimuthAngle={-0.42} minZoom={28} maxZoom={48} />
+      <OrbitControls
+        ref={controlsRef}
+        enablePan={false}
+        enableRotate
+        enableDamping
+        dampingFactor={0.08}
+        rotateSpeed={0.72}
+        minPolarAngle={LOCKED_POLAR_ANGLE}
+        maxPolarAngle={LOCKED_POLAR_ANGLE}
+        minZoom={28}
+        maxZoom={48}
+        autoRotate={autoRotateActive}
+        autoRotateSpeed={AUTO_ROTATE_SPEED}
+      />
 
-      <group rotation={[-0.34, -0.72, -0.04]} position={[-11.5, 0, -6.2]}>
+      <group>
+        <group position={[-sceneCenter.x, 0, -sceneCenter.z]}>
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[11, -0.1, 5.6]}>
           <planeGeometry args={[36, 26]} />
           <meshStandardMaterial color="#d3dde8" />
@@ -440,7 +532,13 @@ function RuntimeSceneContent({
                   smoothness={4}
                   position={[center.x, 0.02, center.z]}
                 >
-                  <meshStandardMaterial color="#d9691f" emissive="#d9691f" emissiveIntensity={0.4} transparent opacity={0.85} />
+                  <meshStandardMaterial
+                    color="#d9691f"
+                    emissive="#d9691f"
+                    emissiveIntensity={0.4}
+                    transparent
+                    opacity={0.85}
+                  />
                 </RoundedBox>
               ) : null}
 
@@ -512,24 +610,52 @@ function RuntimeSceneContent({
               })}
 
               <DuctSegment from={trunkJunction} to={branchHorizontal} color={ductColor} />
-              <DuctSegment from={branchHorizontal} to={new THREE.Vector3(branchPoint.x, trunkY, branchPoint.z)} color={ductColor} />
-              <DuctSegment from={new THREE.Vector3(branchPoint.x, trunkY, branchPoint.z)} to={branchPoint} thickness={0.18} color={ductColor} />
-              <DuctSegment from={branchPoint} to={new THREE.Vector3(branchPoint.x, 1.55, branchPoint.z)} thickness={0.16} color="#d6dde6" />
+              <DuctSegment
+                from={branchHorizontal}
+                to={new THREE.Vector3(branchPoint.x, trunkY, branchPoint.z)}
+                color={ductColor}
+              />
+              <DuctSegment
+                from={new THREE.Vector3(branchPoint.x, trunkY, branchPoint.z)}
+                to={branchPoint}
+                thickness={0.18}
+                color={ductColor}
+              />
+              <DuctSegment
+                from={branchPoint}
+                to={new THREE.Vector3(branchPoint.x, 1.55, branchPoint.z)}
+                thickness={0.16}
+                color="#d6dde6"
+              />
 
               <FlowRoute
-                points={[trunkFeedEnd, trunkJunction, branchHorizontal, new THREE.Vector3(branchPoint.x, trunkY, branchPoint.z), branchPoint]}
+                points={[
+                  trunkFeedEnd,
+                  trunkJunction,
+                  branchHorizontal,
+                  new THREE.Vector3(branchPoint.x, trunkY, branchPoint.z),
+                  branchPoint,
+                ]}
                 color={flowColor}
                 intensity={intensity}
               />
               <FlowRoute
-                points={[branchPoint, new THREE.Vector3(branchPoint.x, 2.1, branchPoint.z), new THREE.Vector3(center.x, 1.42, center.z)]}
+                points={[
+                  branchPoint,
+                  new THREE.Vector3(branchPoint.x, 2.1, branchPoint.z),
+                  new THREE.Vector3(center.x, 1.42, center.z),
+                ]}
                 color={flowColor}
                 intensity={Math.max(0.12, intensity * 0.85)}
               />
 
-              <Html position={[center.x, 1.55, center.z]} transform distanceFactor={11}>
-                <RoomBadge zone={zone} label={space.name} isSelected={isSelected} isWorstZone={isWorstZone} />
-              </Html>
+              <FloatingRoomBadge
+                position={[center.x, 1.55, center.z]}
+                zone={zone}
+                label={space.name}
+                isSelected={isSelected}
+                isWorstZone={isWorstZone}
+              />
             </group>
           );
         })}
@@ -581,6 +707,7 @@ function RuntimeSceneContent({
             {formatZoneToneLabel(mode)}
           </div>
         </Html>
+        </group>
       </group>
     </>
   );
@@ -591,12 +718,124 @@ function formatZoneToneLabel(mode: string) {
 }
 
 export function RuntimeScene(props: RuntimeSceneProps) {
+  const controlsRef = useRef<import("three-stdlib").OrbitControls | null>(null);
+  const idleTimerRef = useRef<number | null>(null);
+  const [isAutoRotateEnabled, setIsAutoRotateEnabled] = useState(true);
+  const [autoRotateActive, setAutoRotateActive] = useState(false);
+
+  const scheduleIdleRotation = () => {
+    if (idleTimerRef.current) {
+      window.clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+
+    if (!isAutoRotateEnabled) {
+      setAutoRotateActive(false);
+      return;
+    }
+
+    idleTimerRef.current = window.setTimeout(() => {
+      setAutoRotateActive(true);
+    }, AUTO_ROTATE_IDLE_DELAY_MS);
+  };
+
+  const registerInteraction = () => {
+    setAutoRotateActive(false);
+    scheduleIdleRotation();
+  };
+
+  useEffect(() => {
+    scheduleIdleRotation();
+
+    return () => {
+      if (idleTimerRef.current) {
+        window.clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
+      }
+    };
+  }, [isAutoRotateEnabled]);
+
+  useEffect(() => {
+    const handleInteraction = () => {
+      setAutoRotateActive(false);
+
+      if (idleTimerRef.current) {
+        window.clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
+      }
+
+      if (isAutoRotateEnabled) {
+        idleTimerRef.current = window.setTimeout(() => {
+          setAutoRotateActive(true);
+        }, AUTO_ROTATE_IDLE_DELAY_MS);
+      }
+    };
+
+    window.addEventListener("pointerdown", handleInteraction);
+    window.addEventListener("pointermove", handleInteraction);
+    window.addEventListener("wheel", handleInteraction, { passive: true });
+    window.addEventListener("touchstart", handleInteraction, { passive: true });
+    window.addEventListener("keydown", handleInteraction);
+
+    return () => {
+      window.removeEventListener("pointerdown", handleInteraction);
+      window.removeEventListener("pointermove", handleInteraction);
+      window.removeEventListener("wheel", handleInteraction);
+      window.removeEventListener("touchstart", handleInteraction);
+      window.removeEventListener("keydown", handleInteraction);
+    };
+  }, [isAutoRotateEnabled]);
+
   return (
-    <div className="relative h-[720px] w-full overflow-hidden rounded-[2rem] border border-white/40 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.92),rgba(224,232,240,0.75)_42%,rgba(199,211,224,0.96)_100%)] shadow-[0_28px_90px_rgba(15,23,42,0.18)]">
+    <div
+      className="relative h-[720px] w-full overflow-hidden rounded-[2rem] border border-white/40 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.92),rgba(224,232,240,0.75)_42%,rgba(199,211,224,0.96)_100%)] shadow-[0_28px_90px_rgba(15,23,42,0.18)]"
+      onPointerDown={registerInteraction}
+      onPointerMove={registerInteraction}
+      onWheel={registerInteraction}
+      onTouchStart={registerInteraction}
+    >
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-32 bg-gradient-to-b from-white/55 to-transparent" />
       <div className="pointer-events-none absolute inset-x-6 top-5 z-10 flex items-center justify-between rounded-full border border-white/55 bg-white/62 px-4 py-2 text-xs font-medium uppercase tracking-[0.24em] text-slate-600 backdrop-blur">
         <span>Dollhouse HVAC Twin</span>
-        <span>Ceiling supply ducts · live airflow</span>
+        <span>Ceiling supply ducts | live airflow</span>
+      </div>
+      <div className="absolute bottom-5 right-5 z-10">
+        <button
+          type="button"
+          onClick={() => {
+            const nextValue = !isAutoRotateEnabled;
+            setIsAutoRotateEnabled(nextValue);
+            setAutoRotateActive(false);
+
+            if (idleTimerRef.current) {
+              window.clearTimeout(idleTimerRef.current);
+              idleTimerRef.current = null;
+            }
+
+            if (nextValue) {
+              idleTimerRef.current = window.setTimeout(() => {
+                setAutoRotateActive(true);
+              }, AUTO_ROTATE_IDLE_DELAY_MS);
+            }
+          }}
+          aria-pressed={isAutoRotateEnabled}
+          aria-label={isAutoRotateEnabled ? "Disable auto rotate" : "Enable auto rotate"}
+          className={`flex h-10 w-[76px] items-center rounded-full border px-1.5 transition ${
+            isAutoRotateEnabled
+              ? "border-emerald-400/55 bg-emerald-500/92 shadow-[0_10px_24px_rgba(16,185,129,0.24)]"
+              : "border-slate-200/90 bg-white/86 shadow-[0_10px_22px_rgba(15,23,42,0.08)]"
+          }`}
+        >
+          <span
+            className={`flex h-7 w-7 items-center justify-center rounded-full text-[12px] transition-transform ${
+              isAutoRotateEnabled
+                ? "translate-x-[36px] bg-white text-emerald-600"
+                : "translate-x-0 bg-slate-900 text-white"
+            }`}
+          >
+            ↻
+          </span>
+        </button>
       </div>
       <Canvas
         orthographic
@@ -604,7 +843,7 @@ export function RuntimeScene(props: RuntimeSceneProps) {
         dpr={1}
         gl={{ antialias: false, powerPreference: "high-performance" }}
       >
-        <RuntimeSceneContent {...props} />
+        <RuntimeSceneContent {...props} autoRotateActive={autoRotateActive} controlsRef={controlsRef} />
       </Canvas>
     </div>
   );
