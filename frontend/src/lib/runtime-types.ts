@@ -170,6 +170,16 @@ export type RuntimeFaultDescriptor = {
   severity: number;
 };
 
+export type RuntimePersistenceSummary = {
+  rawWeatherSamples: number;
+  rawDeviceSamples: number;
+  twinSnapshots: number;
+  runtimeFrames: number;
+  zoneTwinSamples: number;
+  deviceDiagnosisSamples: number;
+  lastPersistedObservedAt: string | null;
+};
+
 export type RuntimeBootstrapPayload = {
   buildingId: string;
   generatedAt: string;
@@ -179,6 +189,7 @@ export type RuntimeBootstrapPayload = {
   latestTwinSnapshot: TwinSnapshot | null;
   controls: RuntimeControlState;
   availableFaults: RuntimeFaultDescriptor[];
+  persistenceSummary: RuntimePersistenceSummary;
 };
 
 export type RuntimeSocketMessage =
@@ -193,6 +204,7 @@ export type RuntimeSocketMessage =
         twin: TwinSnapshot | null;
         sandbox: SandboxTickResult | null;
         controls: RuntimeControlState;
+        persistenceSummary: RuntimePersistenceSummary;
       };
     }
   | {

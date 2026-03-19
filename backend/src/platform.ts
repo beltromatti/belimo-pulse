@@ -3,9 +3,8 @@ import { ProductDefinition } from "./catalog";
 import {
   getLatestTwinSnapshot,
   insertControlEvent,
-  insertDeviceObservations,
-  insertTwinSnapshot,
-  insertWeatherObservation,
+  getRuntimePersistenceSummary,
+  insertRuntimeArtifacts,
   upsertBlueprintRecord,
   upsertFacilityPreferences,
 } from "./db";
@@ -14,6 +13,7 @@ import {
   RuntimeControlInput,
   RuntimeControlState,
   RuntimeFaultDescriptor,
+  RuntimePersistenceSummary,
   SandboxTickResult,
   TwinSnapshot,
 } from "./runtime-types";
@@ -24,6 +24,7 @@ type TickListener = (payload: {
   twin: TwinSnapshot | null;
   sandbox: SandboxTickResult | null;
   controls: RuntimeControlState;
+  persistenceSummary: RuntimePersistenceSummary;
 }) => void;
 
 export class BelimoPlatform {
@@ -36,6 +37,16 @@ export class BelimoPlatform {
   private latestTwinSnapshot: TwinSnapshot | null = null;
 
   private lastError: string | null = null;
+
+  private persistenceSummary: RuntimePersistenceSummary = {
+    rawWeatherSamples: 0,
+    rawDeviceSamples: 0,
+    twinSnapshots: 0,
+    runtimeFrames: 0,
+    zoneTwinSamples: 0,
+    deviceDiagnosisSamples: 0,
+    lastPersistedObservedAt: null,
+  };
 
   private readonly listeners = new Set<TickListener>();
 
@@ -95,6 +106,10 @@ export class BelimoPlatform {
     return this.sandboxEngine.getAvailableFaults();
   }
 
+  getPersistenceSummary() {
+    return this.persistenceSummary;
+  }
+
   getBootstrapPayload(): RuntimeBootstrapPayload {
     return {
       buildingId: this.blueprint.blueprint_id,
@@ -105,6 +120,7 @@ export class BelimoPlatform {
       latestTwinSnapshot: this.latestTwinSnapshot,
       controls: this.getControls(),
       availableFaults: this.getAvailableFaults(),
+      persistenceSummary: this.getPersistenceSummary(),
     };
   }
 
@@ -130,6 +146,7 @@ export class BelimoPlatform {
 
   async hydrateFromDatabase() {
     this.latestTwinSnapshot = await getLatestTwinSnapshot(this.blueprint.blueprint_id);
+    this.persistenceSummary = await getRuntimePersistenceSummary(this.blueprint.blueprint_id);
   }
 
   private async runTick() {
@@ -142,13 +159,13 @@ export class BelimoPlatform {
     try {
       const batch = await this.sandboxEngine.tick();
       const snapshot = this.belimoEngine.ingest(batch);
+      const controls = this.sandboxEngine.getControlState();
 
-      await insertWeatherObservation(batch.buildingId, batch.observedAt, batch.weather);
-      await insertDeviceObservations(batch.buildingId, batch.observedAt, "sandbox", batch.deviceReadings);
-      await insertTwinSnapshot(snapshot);
+      await insertRuntimeArtifacts({ batch, snapshot, controls });
 
       this.latestSandboxBatch = batch;
       this.latestTwinSnapshot = snapshot;
+      this.persistenceSummary = await getRuntimePersistenceSummary(this.blueprint.blueprint_id);
       this.lastError = null;
       this.emitTick();
     } catch (error) {
@@ -166,6 +183,7 @@ export class BelimoPlatform {
       twin: this.latestTwinSnapshot,
       sandbox: this.latestSandboxBatch,
       controls: this.getControls(),
+      persistenceSummary: this.getPersistenceSummary(),
     };
 
     for (const listener of this.listeners) {

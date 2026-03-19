@@ -14,7 +14,10 @@ import {
   createHealthcheck,
   ensureDatabaseReady,
   getDatabaseHealth,
+  listRecentDeviceDiagnoses,
   listRecentDeviceObservations,
+  listRecentRuntimeFrames,
+  listRecentZoneTwinObservations,
 } from "./db";
 import { BelimoPlatform } from "./platform";
 import { RuntimeSocketMessage } from "./runtime-types";
@@ -29,6 +32,14 @@ const pingSchema = z.object({
 
 const historyQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(50),
+});
+
+const zoneHistoryQuerySchema = historyQuerySchema.extend({
+  zoneId: z.string().min(1),
+});
+
+const deviceHistoryQuerySchema = historyQuerySchema.extend({
+  deviceId: z.string().min(1),
 });
 
 const controlSchema = z.object({
@@ -189,6 +200,39 @@ async function bootstrap() {
     response.json({
       ok: true,
       observations: rows,
+    });
+  });
+
+  app.get("/api/runtime/history", async (request, response) => {
+    const query = historyQuerySchema.parse(request.query);
+    const frames = await listRecentRuntimeFrames(sandboxBlueprint.blueprint_id, query.limit);
+
+    response.json({
+      ok: true,
+      frames,
+      persistenceSummary: platform.getPersistenceSummary(),
+    });
+  });
+
+  app.get("/api/twin/history/zones", async (request, response) => {
+    const query = zoneHistoryQuerySchema.parse(request.query);
+    const rows = await listRecentZoneTwinObservations(sandboxBlueprint.blueprint_id, query.zoneId, query.limit);
+
+    response.json({
+      ok: true,
+      zoneId: query.zoneId,
+      observations: rows,
+    });
+  });
+
+  app.get("/api/twin/history/devices", async (request, response) => {
+    const query = deviceHistoryQuerySchema.parse(request.query);
+    const rows = await listRecentDeviceDiagnoses(sandboxBlueprint.blueprint_id, query.deviceId, query.limit);
+
+    response.json({
+      ok: true,
+      deviceId: query.deviceId,
+      diagnoses: rows,
     });
   });
 

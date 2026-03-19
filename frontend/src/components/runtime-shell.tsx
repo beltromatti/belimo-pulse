@@ -37,6 +37,7 @@ type RuntimeState = {
   twin: RuntimeBootstrapPayload["latestTwinSnapshot"];
   sandbox: RuntimeBootstrapPayload["latestSandboxBatch"];
   controls: RuntimeControlState;
+  persistenceSummary: RuntimeBootstrapPayload["persistenceSummary"];
 };
 
 const modeOptions: Array<{ value: FacilityModePreference; label: string }> = [
@@ -108,6 +109,7 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
     twin: initial.latestTwinSnapshot,
     sandbox: initial.latestSandboxBatch,
     controls: initial.controls,
+    persistenceSummary: initial.persistenceSummary,
   });
   const [draftControls, setDraftControls] = useState<RuntimeControlState>(initial.controls);
   const [connectionState, setConnectionState] = useState<"connecting" | "live" | "offline">("connecting");
@@ -164,6 +166,7 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
   const activeFaults = deferredRuntime.sandbox?.operationalState.activeFaults ?? [];
   const comfort = deferredRuntime.twin?.summary.averageComfortScore ?? 0;
   const runtimeHours = ((deferredRuntime.sandbox?.operationalState.runtimeSeconds ?? 0) / 3600).toFixed(2);
+  const persistenceSummary = deferredRuntime.persistenceSummary;
   const totalAirflow = deferredRuntime.sandbox?.truth.supplyAirflowM3H ?? 0;
   const sourcePower = Number(sourceTelemetry.electrical_power_kw ?? 0);
   const mixedAirTemperatureC = Number(
@@ -193,6 +196,7 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
           twin: message.payload.latestTwinSnapshot,
           sandbox: message.payload.latestSandboxBatch,
           controls: message.payload.controls,
+          persistenceSummary: message.payload.persistenceSummary,
         });
       });
       setConnectionState("live");
@@ -206,6 +210,7 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
           twin: message.payload.twin,
           sandbox: message.payload.sandbox,
           controls: message.payload.controls,
+          persistenceSummary: message.payload.persistenceSummary,
         });
       });
       setConnectionState("live");
@@ -755,7 +760,21 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
                   label="Static Pressure"
                   value={`${deferredRuntime.twin?.derived.staticPressurePa.toFixed(0) ?? "--"} Pa`}
                 />
+                <DetailPill label="History Frames" value={`${persistenceSummary.runtimeFrames}`} />
+                <DetailPill label="Zone Samples" value={`${persistenceSummary.zoneTwinSamples}`} />
               </div>
+              <p className="mt-4 text-sm leading-6 text-slate-600">
+                Raw telemetry, twin-derived zone states, device diagnoses and per-tick control context are persisted for
+                future building-brain analysis. Last archived frame:{" "}
+                {persistenceSummary.lastPersistedObservedAt
+                  ? new Date(persistenceSummary.lastPersistedObservedAt).toLocaleString("en-CH", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })
+                  : "not yet"}
+                .
+              </p>
               {controlError ? (
                 <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
                   {controlError}
