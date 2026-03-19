@@ -5,7 +5,7 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { z } from "zod";
 
-import { BuildingBrainAgent } from "./ai/agent";
+import { BelimoBrainAgent } from "./ai/agent";
 import { BelimoEngine } from "./belimo-engine";
 import { loadSandboxBlueprint } from "./blueprint";
 import { loadProductsCatalog } from "./catalog";
@@ -70,9 +70,16 @@ async function bootstrap() {
     sandboxEngine.getTickSeconds() * 1000,
   );
 
-  const brainAgent = new BuildingBrainAgent(platform, env.OPENAI_API_KEY, env.OPENAI_MODEL);
+  const brainAgent = new BelimoBrainAgent(
+    platform,
+    env.OPENAI_API_KEY,
+    env.OPENAI_MODEL,
+    env.OPENAI_REASONING_EFFORT,
+    env.BELIMO_BRAIN_ANALYSIS_INTERVAL_TICKS,
+  );
 
   await platform.hydrateFromDatabase();
+  await brainAgent.hydrate();
   await platform.start();
 
   const app = express();
@@ -111,6 +118,12 @@ async function bootstrap() {
           status: twin ? "running" : "starting",
           lastObservedAt: twin?.observedAt ?? null,
           lastError: platform.getLastError(),
+        },
+        belimoBrain: {
+          status: "running",
+          model: env.OPENAI_MODEL,
+          reasoningEffort: env.OPENAI_REASONING_EFFORT,
+          activeAlertCount: brainAgent.getActiveAlerts().length,
         },
       },
       timestamp: new Date().toISOString(),
@@ -252,13 +265,13 @@ async function bootstrap() {
 
   const chatSchema = z.object({
     message: z.string().min(1).max(4000),
-    conversationId: z.string().optional(),
+    conversationId: z.string().nullish(),
   });
 
   app.post("/api/chat", async (request, response) => {
     try {
       const payload = chatSchema.parse(request.body ?? {});
-      const result = await brainAgent.chat(payload.message, payload.conversationId);
+      const result = await brainAgent.chat(payload.message, payload.conversationId ?? undefined);
 
       response.json({
         ok: true,
@@ -275,20 +288,36 @@ async function bootstrap() {
     }
   });
 
-  app.get("/api/brain/alerts", (_request, response) => {
+  const sendBrainAlerts = (_request: express.Request, response: express.Response) => {
     response.json({
       ok: true,
       alerts: brainAgent.getActiveAlerts(),
     });
-  });
+  };
 
-  app.post("/api/brain/alerts/:id/dismiss", (request, response) => {
-    brainAgent.dismissAlert(request.params.id);
+  app.get("/api/brain/alerts", sendBrainAlerts);
+  app.get("/api/belimo-brain/alerts", sendBrainAlerts);
+
+  const dismissBrainAlert = async (request: express.Request, response: express.Response) => {
+    const alertId = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id;
+
+    if (!alertId) {
+      response.status(400).json({
+        ok: false,
+        message: "Missing alert id.",
+      });
+      return;
+    }
+
+    await brainAgent.dismissAlert(alertId);
 
     response.json({
       ok: true,
     });
-  });
+  };
+
+  app.post("/api/brain/alerts/:id/dismiss", dismissBrainAlert);
+  app.post("/api/belimo-brain/alerts/:id/dismiss", dismissBrainAlert);
 
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     if (error instanceof z.ZodError) {
@@ -309,6 +338,16 @@ async function bootstrap() {
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });
+
+  function broadcastSocketMessage(message: RuntimeSocketMessage) {
+    const serialized = JSON.stringify(message);
+
+    for (const client of wss.clients) {
+      if (client.readyState === client.OPEN) {
+        client.send(serialized);
+      }
+    }
+  }
 
   wss.on("connection", (socket, request) => {
     const origin = request.headers.origin;
@@ -350,40 +389,28 @@ async function bootstrap() {
     });
   });
 
+  const unsubscribeBelimoBrainAlerts = brainAgent.onAlert((alert) => {
+    broadcastSocketMessage({
+      type: "brain_alert",
+      payload: {
+        id: alert.id,
+        severity: alert.severity,
+        title: alert.title,
+        body: alert.body,
+        suggestedAction: alert.suggestedAction,
+        timestamp: alert.timestamp,
+      },
+    });
+  });
+
   const unsubscribe = platform.onTick((payload) => {
-    const message = JSON.stringify({
+    broadcastSocketMessage({
       type: "tick",
       payload,
-    } satisfies RuntimeSocketMessage);
-
-    for (const client of wss.clients) {
-      if (client.readyState === client.OPEN) {
-        client.send(message);
-      }
-    }
+    });
 
     if (payload.twin) {
-      const alert = brainAgent.evaluateTick(payload.twin, payload.controls);
-
-      if (alert) {
-        const alertMessage = JSON.stringify({
-          type: "brain_alert",
-          payload: {
-            id: alert.id,
-            severity: alert.severity,
-            title: alert.title,
-            body: alert.body,
-            suggestedAction: alert.suggestedAction,
-            timestamp: alert.timestamp,
-          },
-        } satisfies RuntimeSocketMessage);
-
-        for (const client of wss.clients) {
-          if (client.readyState === client.OPEN) {
-            client.send(alertMessage);
-          }
-        }
-      }
+      brainAgent.handleTick(payload.twin, payload.controls);
     }
   });
 
@@ -393,6 +420,7 @@ async function bootstrap() {
 
   const shutdown = async () => {
     unsubscribe();
+    unsubscribeBelimoBrainAlerts();
     wss.close();
     await platform.stop();
     server.close(async () => {

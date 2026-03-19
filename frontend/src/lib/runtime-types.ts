@@ -230,6 +230,7 @@ export type BrainAlert = {
   body: string;
   suggestedAction?: string;
   timestamp: string;
+  dismissed?: boolean;
 };
 
 export type RuntimeSocketMessage =

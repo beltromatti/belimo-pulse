@@ -1,121 +1,146 @@
-import type { ChatCompletionTool } from "openai/resources/chat/completions";
+import type { Tool } from "openai/resources/responses/responses";
 
-import { listRecentZoneTwinObservations } from "../db";
+import {
+  listRecentDeviceTelemetryHistory,
+  listRecentTwinSnapshotSummaries,
+  listRecentZoneTwinObservations,
+} from "../db";
 import { BelimoPlatform } from "../platform";
 
-export const brainToolDefinitions: ChatCompletionTool[] = [
+export const brainToolDefinitions: Tool[] = [
   {
     type: "function",
-    function: {
-      name: "get_building_summary",
-      description:
-        "Get the current building status including comfort scores, weather, energy demand, and active alerts. Call this first when the user asks about the building.",
-      parameters: { type: "object", properties: {}, required: [] },
-    },
+    name: "get_building_summary",
+    description:
+      "Get the current building status including comfort scores, weather, energy demand, and active alerts. Call this first when the user asks about the building.",
+    parameters: { type: "object", properties: {}, required: [] },
+    strict: false,
   },
   {
     type: "function",
-    function: {
-      name: "get_zone_details",
-      description:
-        "Get detailed information about a specific thermal zone including temperature, humidity, CO2, airflow, occupancy, and comfort score.",
-      parameters: {
-        type: "object",
-        properties: {
-          zoneId: { type: "string", description: "The zone ID (e.g. 'lobby', 'open-office', 'meeting-room', 'facility-office')" },
-        },
-        required: ["zoneId"],
+    name: "get_zone_details",
+    description:
+      "Get detailed information about a specific thermal zone including temperature, humidity, CO2, airflow, occupancy, and comfort score.",
+    parameters: {
+      type: "object",
+      properties: {
+        zoneId: { type: "string", description: "The zone ID (e.g. 'lobby', 'open-office', 'meeting-room', 'facility-office')" },
       },
+      required: ["zoneId"],
     },
+    strict: false,
   },
   {
     type: "function",
-    function: {
-      name: "get_device_health",
-      description:
-        "Get the health status and diagnostics for a specific device including health score, alerts, and telemetry metrics.",
-      parameters: {
-        type: "object",
-        properties: {
-          deviceId: { type: "string", description: "The device ID (e.g. 'zone-damper-office-1', 'rtu-1', 'room-iaq-office-1')" },
-        },
-        required: ["deviceId"],
+    name: "get_device_health",
+    description:
+      "Get the health status and diagnostics for a specific device including health score, alerts, and telemetry metrics.",
+    parameters: {
+      type: "object",
+      properties: {
+        deviceId: { type: "string", description: "The device ID (e.g. 'zone-damper-office-1', 'rtu-1', 'room-iaq-office-1')" },
       },
+      required: ["deviceId"],
     },
+    strict: false,
   },
   {
     type: "function",
-    function: {
-      name: "adjust_zone_temperature",
-      description:
-        "Adjust the temperature offset for a specific zone. Positive values make the zone warmer, negative values make it cooler. Range: -3 to +3 degrees C.",
-      parameters: {
-        type: "object",
-        properties: {
-          zoneId: { type: "string", description: "The zone to adjust" },
-          offsetC: { type: "number", description: "Temperature offset in Celsius (-3 to +3)" },
-        },
-        required: ["zoneId", "offsetC"],
+    name: "adjust_zone_temperature",
+    description:
+      "Adjust the temperature offset for a specific zone. Positive values make the zone warmer, negative values make it cooler. Range: -3 to +3 degrees C.",
+    parameters: {
+      type: "object",
+      properties: {
+        zoneId: { type: "string", description: "The zone to adjust" },
+        offsetC: { type: "number", description: "Temperature offset in Celsius (-3 to +3)" },
       },
+      required: ["zoneId", "offsetC"],
     },
+    strict: false,
   },
   {
     type: "function",
-    function: {
-      name: "set_facility_mode",
-      description:
-        "Change the HVAC operating mode. 'auto' lets the system decide, 'cooling' forces cooling, 'heating' forces heating, 'economizer' uses free cooling from outdoor air, 'ventilation' provides air circulation without active heating/cooling.",
-      parameters: {
-        type: "object",
-        properties: {
-          mode: {
-            type: "string",
-            enum: ["auto", "ventilation", "cooling", "heating", "economizer"],
-            description: "The facility operating mode",
-          },
+    name: "set_facility_mode",
+    description:
+      "Change the HVAC operating mode. 'auto' lets the system decide, 'cooling' forces cooling, 'heating' forces heating, 'economizer' uses free cooling from outdoor air, 'ventilation' provides air circulation without active heating/cooling.",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["auto", "ventilation", "cooling", "heating", "economizer"],
+          description: "The facility operating mode",
         },
-        required: ["mode"],
       },
+      required: ["mode"],
     },
+    strict: false,
   },
   {
     type: "function",
-    function: {
-      name: "toggle_fault",
-      description:
-        "Toggle a fault simulation for testing or diagnostics. Use 'forced_on' to activate, 'forced_off' to deactivate, or 'auto' for time-based activation.",
-      parameters: {
-        type: "object",
-        properties: {
-          faultId: { type: "string", description: "The fault profile ID" },
-          mode: { type: "string", enum: ["auto", "forced_on", "forced_off"], description: "Fault activation mode" },
-        },
-        required: ["faultId", "mode"],
+    name: "toggle_fault",
+    description:
+      "Toggle a fault simulation for testing or diagnostics. Use 'forced_on' to activate, 'forced_off' to deactivate, or 'auto' for time-based activation.",
+    parameters: {
+      type: "object",
+      properties: {
+        faultId: { type: "string", description: "The fault profile ID" },
+        mode: { type: "string", enum: ["auto", "forced_on", "forced_off"], description: "Fault activation mode" },
       },
+      required: ["faultId", "mode"],
     },
+    strict: false,
   },
   {
     type: "function",
-    function: {
-      name: "get_weather",
-      description: "Get the current outdoor weather conditions for the building location.",
-      parameters: { type: "object", properties: {}, required: [] },
-    },
+    name: "get_weather",
+    description: "Get the current outdoor weather conditions for the building location.",
+    parameters: { type: "object", properties: {}, required: [] },
+    strict: false,
   },
   {
     type: "function",
-    function: {
-      name: "get_comfort_history",
-      description: "Get recent comfort and environmental history for a specific zone.",
-      parameters: {
-        type: "object",
-        properties: {
-          zoneId: { type: "string", description: "The zone to query" },
-          limit: { type: "number", description: "Number of recent observations (default 20, max 100)" },
-        },
-        required: ["zoneId"],
+    name: "get_comfort_history",
+    description: "Get recent comfort and environmental history for a specific zone.",
+    parameters: {
+      type: "object",
+      properties: {
+        zoneId: { type: "string", description: "The zone to query" },
+        limit: { type: "number", description: "Number of recent observations (default 20, max 100)" },
       },
+      required: ["zoneId"],
     },
+    strict: false,
+  },
+  {
+    type: "function",
+    name: "get_building_history",
+    description:
+      "Get recent historical building snapshots including comfort, supply temperature, demand, static pressure, controls, and active faults.",
+    parameters: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Number of recent snapshots to retrieve (default 12, max 48)" },
+      },
+      required: [],
+    },
+    strict: false,
+  },
+  {
+    type: "function",
+    name: "get_device_telemetry_history",
+    description:
+      "Get recent raw telemetry samples for a device so Belimo Brain can inspect signal trends over time.",
+    parameters: {
+      type: "object",
+      properties: {
+        deviceId: { type: "string", description: "The device ID to inspect" },
+        limit: { type: "number", description: "Number of recent samples to retrieve (default 20, max 60)" },
+      },
+      required: ["deviceId"],
+    },
+    strict: false,
   },
 ];
 
@@ -228,7 +253,7 @@ export async function executeBrainTool(
       const offsetC = Number(args.offsetC);
       const controls = await platform.updateControls(
         { zoneTemperatureOffsetsC: { [zoneId]: offsetC } },
-        "ai-brain",
+        "belimo-brain",
       );
 
       return {
@@ -241,7 +266,7 @@ export async function executeBrainTool(
 
     case "set_facility_mode": {
       const mode = String(args.mode) as "auto" | "ventilation" | "cooling" | "heating" | "economizer";
-      const controls = await platform.updateControls({ sourceModePreference: mode }, "ai-brain");
+      const controls = await platform.updateControls({ sourceModePreference: mode }, "belimo-brain");
 
       return {
         success: true,
@@ -255,7 +280,7 @@ export async function executeBrainTool(
       const mode = String(args.mode) as "auto" | "forced_on" | "forced_off";
       const controls = await platform.updateControls(
         { faultOverrides: { [faultId]: mode } },
-        "ai-brain",
+        "belimo-brain",
       );
 
       return {
@@ -299,6 +324,45 @@ export async function executeBrainTool(
           occupancy: r.occupancy_count,
           airflow: r.supply_airflow_m3_h,
           comfort: r.comfort_score,
+        })),
+      };
+    }
+
+    case "get_building_history": {
+      const limit = Math.min(Number(args.limit) || 12, 48);
+      const rows = await listRecentTwinSnapshotSummaries(blueprint.blueprint_id, limit);
+
+      return {
+        count: rows.length,
+        snapshots: rows.map((row) => ({
+          at: row.observed_at,
+          averageComfort: row.summary.averageComfortScore,
+          worstZone: row.summary.worstZoneId,
+          activeAlertCount: row.summary.activeAlertCount,
+          outdoorTemperatureC: row.summary.outdoorTemperatureC,
+          supplyTemperatureC: row.summary.supplyTemperatureC,
+          coolingDemandKw: row.derived.buildingCoolingDemandKw,
+          heatingDemandKw: row.derived.buildingHeatingDemandKw,
+          ventilationEffectivenessPct: row.derived.ventilationEffectivenessPct,
+          staticPressurePa: row.derived.staticPressurePa,
+          controls: row.controls,
+          activeFaults: row.active_faults ?? [],
+        })),
+      };
+    }
+
+    case "get_device_telemetry_history": {
+      const deviceId = String(args.deviceId);
+      const limit = Math.min(Number(args.limit) || 20, 60);
+      const rows = await listRecentDeviceTelemetryHistory(blueprint.blueprint_id, deviceId, limit);
+
+      return {
+        deviceId,
+        count: rows.length,
+        samples: rows.map((row) => ({
+          at: row.observed_at,
+          productId: row.product_id,
+          telemetry: row.telemetry,
         })),
       };
     }

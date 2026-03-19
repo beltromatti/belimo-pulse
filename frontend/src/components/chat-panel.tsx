@@ -24,7 +24,7 @@ export function ChatPanel({ alerts, onDismissAlert }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const undismissedAlerts = alerts.filter((a) => !("dismissed" in a && a.dismissed));
+  const undismissedAlerts = alerts.filter((alert) => !alert.dismissed);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -43,11 +43,14 @@ export function ChatPanel({ alerts, onDismissAlert }: ChatPanelProps) {
   useEffect(() => {
     if (alerts.length > prevAlertCountRef.current && !isOpen) {
       const latest = alerts[alerts.length - 1];
+      const severityLabel =
+        latest.severity === "critical" ? "CRITICAL" : latest.severity === "warning" ? "WARNING" : "INFO";
+
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          content: `**${latest.severity === "critical" ? "CRITICAL" : latest.severity === "warning" ? "WARNING" : "INFO"}**: ${latest.title}\n\n${latest.body}${latest.suggestedAction ? `\n\n*Suggested: ${latest.suggestedAction}*` : ""}`,
+          content: `${severityLabel}: ${latest.title}\n\n${latest.body}${latest.suggestedAction ? `\n\nSuggested action: ${latest.suggestedAction}` : ""}`,
           timestamp: latest.timestamp,
         },
       ]);
@@ -148,7 +151,7 @@ export function ChatPanel({ alerts, onDismissAlert }: ChatPanelProps) {
         <div className="fixed bottom-24 right-6 z-50 flex h-[560px] w-[380px] flex-col overflow-hidden rounded-[1.4rem] border border-white/55 bg-white/88 shadow-[0_28px_80px_rgba(15,23,42,0.2)] backdrop-blur-xl">
           <div className="flex items-center justify-between border-b border-slate-200/60 bg-gradient-to-r from-[#d9691f]/8 to-transparent px-5 py-3.5">
             <div>
-              <h3 className="text-sm font-semibold text-slate-900">Building Brain</h3>
+              <h3 className="text-sm font-semibold text-slate-900">Belimo Brain</h3>
               <p className="text-[11px] text-slate-500">AI Facility Assistant</p>
             </div>
             <div className="flex h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]" />

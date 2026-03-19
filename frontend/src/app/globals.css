@@ -9,6 +9,8 @@
   --accent-strong: #a24710;
   --muted: #536273;
   --grid: rgba(15, 23, 42, 0.08);
+  --font-space-grotesk: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-ibm-plex-mono: "SFMono-Regular", "IBM Plex Mono", "Menlo", "Consolas", monospace;
 }
 
 @theme inline {

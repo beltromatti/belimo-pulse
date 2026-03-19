@@ -2,6 +2,7 @@ import { Pool, PoolClient } from "pg";
 
 import { BuildingBlueprint } from "./blueprint";
 import { env } from "./config";
+import { BrainAction, BrainAlert, ChatMessage } from "./ai/types";
 import {
   DeviceDiagnosis,
   DeviceTelemetryRecord,
@@ -141,6 +142,48 @@ export async function ensureDatabaseReady() {
 
     CREATE INDEX IF NOT EXISTS pulse_control_events_lookup_idx
       ON pulse_control_events (building_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS pulse_belimo_brain_conversations (
+      conversation_id TEXT PRIMARY KEY,
+      building_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS pulse_belimo_brain_conversations_lookup_idx
+      ON pulse_belimo_brain_conversations (building_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS pulse_belimo_brain_messages (
+      id BIGSERIAL PRIMARY KEY,
+      building_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+      message_timestamp TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS pulse_belimo_brain_messages_lookup_idx
+      ON pulse_belimo_brain_messages (building_id, conversation_id, message_timestamp DESC, id DESC);
+
+    CREATE TABLE IF NOT EXISTS pulse_belimo_brain_alerts (
+      id TEXT PRIMARY KEY,
+      building_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      suggested_action TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      alert_timestamp TIMESTAMPTZ NOT NULL,
+      dismissed BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS pulse_belimo_brain_alerts_lookup_idx
+      ON pulse_belimo_brain_alerts (building_id, dismissed, alert_timestamp DESC);
   `);
 }
 
@@ -520,6 +563,257 @@ export async function insertControlEvent(
     `,
     [buildingId, actor, eventType, JSON.stringify(payload)],
   );
+}
+
+async function upsertBelimoBrainConversation(
+  client: PoolClient | Pool,
+  buildingId: string,
+  conversationId: string,
+) {
+  await client.query(
+    `
+      INSERT INTO pulse_belimo_brain_conversations (conversation_id, building_id)
+      VALUES ($1, $2)
+      ON CONFLICT (conversation_id) DO UPDATE
+      SET building_id = EXCLUDED.building_id, updated_at = NOW()
+    `,
+    [conversationId, buildingId],
+  );
+}
+
+export async function insertBelimoBrainMessages(
+  buildingId: string,
+  conversationId: string,
+  messages: ChatMessage[],
+) {
+  if (messages.length === 0) {
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await upsertBelimoBrainConversation(client, buildingId, conversationId);
+
+    const values: string[] = [];
+    const params: Array<string> = [];
+
+    messages.forEach((message, index) => {
+      const offset = index * 6;
+      values.push(
+        `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}::jsonb, $${offset + 6})`,
+      );
+      params.push(
+        buildingId,
+        conversationId,
+        message.role,
+        message.content,
+        JSON.stringify(message.actions ?? []),
+        message.timestamp,
+      );
+    });
+
+    await client.query(
+      `
+        INSERT INTO pulse_belimo_brain_messages (
+          building_id,
+          conversation_id,
+          role,
+          content,
+          actions,
+          message_timestamp
+        )
+        VALUES ${values.join(", ")}
+      `,
+      params,
+    );
+
+    await client.query(
+      `
+        UPDATE pulse_belimo_brain_conversations
+        SET updated_at = NOW()
+        WHERE conversation_id = $1
+      `,
+      [conversationId],
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function listBelimoBrainConversationMessages(
+  buildingId: string,
+  conversationId: string,
+  limit = 40,
+) {
+  const result = await pool.query<{
+    role: ChatMessage["role"];
+    content: string;
+    actions: BrainAction[] | null;
+    message_timestamp: string;
+  }>(
+    `
+      SELECT
+        role,
+        content,
+        actions,
+        message_timestamp::TEXT
+      FROM pulse_belimo_brain_messages
+      WHERE building_id = $1 AND conversation_id = $2
+      ORDER BY message_timestamp DESC, id DESC
+      LIMIT $3
+    `,
+    [buildingId, conversationId, limit],
+  );
+
+  return result.rows
+    .reverse()
+    .map((row) => ({
+      role: row.role,
+      content: row.content,
+      actions: Array.isArray(row.actions) && row.actions.length > 0 ? (row.actions as ChatMessage["actions"]) : undefined,
+      timestamp: row.message_timestamp,
+    })) satisfies ChatMessage[];
+}
+
+export async function insertBelimoBrainAlert(
+  buildingId: string,
+  alert: BrainAlert,
+  source: string,
+  metadata: Record<string, unknown> = {},
+) {
+  await pool.query(
+    `
+      INSERT INTO pulse_belimo_brain_alerts (
+        id,
+        building_id,
+        source,
+        severity,
+        title,
+        body,
+        suggested_action,
+        metadata,
+        alert_timestamp,
+        dismissed
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+    `,
+    [
+      alert.id,
+      buildingId,
+      source,
+      alert.severity,
+      alert.title,
+      alert.body,
+      alert.suggestedAction ?? null,
+      JSON.stringify(metadata),
+      alert.timestamp,
+      alert.dismissed,
+    ],
+  );
+}
+
+export async function listActiveBelimoBrainAlerts(buildingId: string, limit = 50) {
+  const result = await pool.query<{
+    id: string;
+    severity: BrainAlert["severity"];
+    title: string;
+    body: string;
+    suggested_action: string | null;
+    alert_timestamp: string;
+    dismissed: boolean;
+  }>(
+    `
+      SELECT
+        id,
+        severity,
+        title,
+        body,
+        suggested_action,
+        alert_timestamp::TEXT,
+        dismissed
+      FROM pulse_belimo_brain_alerts
+      WHERE building_id = $1 AND dismissed = FALSE
+      ORDER BY alert_timestamp ASC, created_at ASC
+      LIMIT $2
+    `,
+    [buildingId, limit],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    severity: row.severity,
+    title: row.title,
+    body: row.body,
+    suggestedAction: row.suggested_action ?? undefined,
+    timestamp: row.alert_timestamp,
+    dismissed: row.dismissed,
+  })) satisfies BrainAlert[];
+}
+
+export async function dismissBelimoBrainAlert(buildingId: string, alertId: string) {
+  await pool.query(
+    `
+      UPDATE pulse_belimo_brain_alerts
+      SET dismissed = TRUE, updated_at = NOW()
+      WHERE building_id = $1 AND id = $2
+    `,
+    [buildingId, alertId],
+  );
+}
+
+export async function listRecentTwinSnapshotSummaries(buildingId: string, limit: number) {
+  const result = await pool.query<{
+    observed_at: string;
+    summary: TwinSnapshot["summary"];
+    derived: TwinSnapshot["derived"];
+    controls: RuntimeControlState | null;
+    active_faults: SandboxTickResult["operationalState"]["activeFaults"] | null;
+  }>(
+    `
+      SELECT
+        observed_at::TEXT,
+        summary,
+        derived,
+        controls,
+        active_faults
+      FROM pulse_twin_snapshots
+      WHERE building_id = $1
+      ORDER BY observed_at DESC, id DESC
+      LIMIT $2
+    `,
+    [buildingId, limit],
+  );
+
+  return result.rows;
+}
+
+export async function listRecentDeviceTelemetryHistory(buildingId: string, deviceId: string, limit: number) {
+  const result = await pool.query<{
+    observed_at: string;
+    product_id: string;
+    telemetry: DeviceTelemetryRecord["telemetry"];
+  }>(
+    `
+      SELECT
+        observed_at::TEXT,
+        product_id,
+        telemetry
+      FROM pulse_device_observations
+      WHERE building_id = $1 AND device_id = $2
+      ORDER BY observed_at DESC, id DESC
+      LIMIT $3
+    `,
+    [buildingId, deviceId, limit],
+  );
+
+  return result.rows;
 }
 
 export async function listRecentDeviceObservations(buildingId: string, limit: number) {

@@ -820,7 +820,7 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
               </div>
               <p className="mt-4 text-sm leading-6 text-slate-600">
                 Raw telemetry, twin-derived zone states, device diagnoses and per-tick control context are persisted for
-                future building-brain analysis. Last archived frame:{" "}
+                future Belimo Brain analysis. Last archived frame:{" "}
                 {persistenceSummary.lastPersistedObservedAt
                   ? new Date(persistenceSummary.lastPersistedObservedAt).toLocaleString("en-CH", {
                       hour: "2-digit",

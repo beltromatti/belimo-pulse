@@ -30,7 +30,9 @@ const envSchema = z.object({
     .string()
     .min(1, "OPENAI_API_KEY is required")
     .transform((value) => value.trim()),
-  OPENAI_MODEL: z.string().default("gpt-4.1"),
+  OPENAI_MODEL: z.string().default("gpt-5.4"),
+  OPENAI_REASONING_EFFORT: z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]).default("medium"),
+  BELIMO_BRAIN_ANALYSIS_INTERVAL_TICKS: z.coerce.number().int().min(1).max(720).default(12),
   OPEN_METEO_BASE_URL: z.string().url().default("https://api.open-meteo.com/v1/forecast"),
 });
 
