@@ -1,0 +1,53 @@
+{
+  "sizing": {
+    "verdict": "OVERSIZED",
+    "severity": "fail",
+    "max_torque_nmm": 2.140045166015625,
+    "sizing_ratio": 0.000428009033203125,
+    "detail": "Peak torque is only 0.0% of actuator capacity (2/5000 Nmm). Valve is significantly oversized. Control resolution will be very poor \u2014 small signal changes produce large flow changes, causing hunting."
+  },
+  "linkage": {
+    "verdict": "TIGHT",
+    "severity": "pass",
+    "dead_band_pct": 0.03,
+    "detail": "Dead band of 0.0% \u2014 linkage is properly secured."
+  },
+  "friction": {
+    "verdict": "SMOOTH",
+    "severity": "pass",
+    "friction_map": [],
+    "smoothness_score": 0.8666629090751097,
+    "detail": "No friction anomalies. Smoothness: 0.87/1.00. Valve operates cleanly across full stroke."
+  },
+  "hunting": {
+    "verdict": "HIGH_RISK",
+    "severity": "fail",
+    "risk_score": 81.68201957073656,
+    "max_overshoot_pct": 40.71398750156317,
+    "avg_tracking_error": 3.894006523578852,
+    "dominant_frequency_hz": 0.022521683705829375,
+    "detail": "Hunting risk score: 82/100 \u2014 HIGH. Max overshoot: 40.7%, avg tracking error: 3.9%. This actuator-valve combination will likely oscillate under real control. Recommend reducing proportional gain by ~49%."
+  },
+  "health": {
+    "score": 74,
+    "grade": "C",
+    "sizing_component": 5,
+    "linkage_component": 20,
+    "friction_component": 17.3,
+    "transit_component": 12.3,
+    "symmetry_component": 19.7,
+    "detail": "Health score: 74/100 (Grade C). Sizing: 5/25, Linkage: 20/20, Friction: 17/20, Transit: 12/15, Symmetry: 20/20."
+  },
+  "recommendations": [
+    {
+      "priority": "CRITICAL",
+      "action": "Valve sizing issue: OVERSIZED",
+      "detail": "Peak torque is only 0.0% of actuator capacity (2/5000 Nmm). Valve is significantly oversized. Control resolution will be very poor \u2014 small signal changes produce large flow changes, causing hunting."
+    },
+    {
+      "priority": "HIGH",
+      "action": "Reduce PI controller proportional gain",
+      "detail": "Hunting risk score: 82/100 \u2014 HIGH. Max overshoot: 40.7%, avg tracking error: 3.9%. This actuator-valve combination will likely oscillate under real control. Recommend reducing proportional gain by ~49%."
+    }
+  ]
+}
