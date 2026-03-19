@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { OrbitControls } from "@react-three/drei/core/OrbitControls";
 import { RoundedBox } from "@react-three/drei/core/RoundedBox";
 import { Html } from "@react-three/drei/web/Html";
@@ -26,6 +27,8 @@ type RuntimeSceneProps = {
   selectedZoneId: string | null;
   worstZoneId: string | null;
   onSelectZone: (zoneId: string) => void;
+  totalAirflowM3H: number;
+  sourcePowerKw: number;
 };
 
 type RuntimeSceneContentProps = RuntimeSceneProps & {
@@ -717,6 +720,15 @@ function formatZoneToneLabel(mode: string) {
   return mode.replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function SceneHeaderMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-[112px] rounded-full border border-white/60 bg-white/78 px-3 py-2 text-right shadow-[0_10px_24px_rgba(15,23,42,0.08)]">
+      <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-slate-500">{label}</p>
+      <p className="mt-1 text-sm font-semibold tracking-[-0.03em] text-slate-950">{value}</p>
+    </div>
+  );
+}
+
 export function RuntimeScene(props: RuntimeSceneProps) {
   const controlsRef = useRef<import("three-stdlib").OrbitControls | null>(null);
   const idleTimerRef = useRef<number | null>(null);
@@ -772,14 +784,12 @@ export function RuntimeScene(props: RuntimeSceneProps) {
     };
 
     window.addEventListener("pointerdown", handleInteraction);
-    window.addEventListener("pointermove", handleInteraction);
     window.addEventListener("wheel", handleInteraction, { passive: true });
     window.addEventListener("touchstart", handleInteraction, { passive: true });
     window.addEventListener("keydown", handleInteraction);
 
     return () => {
       window.removeEventListener("pointerdown", handleInteraction);
-      window.removeEventListener("pointermove", handleInteraction);
       window.removeEventListener("wheel", handleInteraction);
       window.removeEventListener("touchstart", handleInteraction);
       window.removeEventListener("keydown", handleInteraction);
@@ -788,16 +798,22 @@ export function RuntimeScene(props: RuntimeSceneProps) {
 
   return (
     <div
-      className="relative h-[720px] w-full overflow-hidden rounded-[2rem] border border-white/40 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.92),rgba(224,232,240,0.75)_42%,rgba(199,211,224,0.96)_100%)] shadow-[0_28px_90px_rgba(15,23,42,0.18)]"
+      className="relative h-[100svh] min-h-[720px] w-full overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.92),rgba(224,232,240,0.75)_42%,rgba(199,211,224,0.96)_100%)]"
       onPointerDown={registerInteraction}
-      onPointerMove={registerInteraction}
       onWheel={registerInteraction}
       onTouchStart={registerInteraction}
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-32 bg-gradient-to-b from-white/55 to-transparent" />
-      <div className="pointer-events-none absolute inset-x-6 top-5 z-10 flex items-center justify-between rounded-full border border-white/55 bg-white/62 px-4 py-2 text-xs font-medium uppercase tracking-[0.24em] text-slate-600 backdrop-blur">
-        <span>Dollhouse HVAC Twin</span>
-        <span>Ceiling supply ducts | live airflow</span>
+      <div className="pointer-events-none absolute inset-x-4 top-4 z-10 sm:inset-x-6 sm:top-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-full border border-white/55 bg-white/62 px-4 py-3 text-slate-600 backdrop-blur">
+          <div className="flex items-center">
+            <Image src="/belimo-wordmark.svg" alt="Belimo Pulse" width={420} height={72} className="h-7 w-auto sm:h-8" />
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <SceneHeaderMetric label="Total Air Flow" value={`${props.totalAirflowM3H.toFixed(0)} m3/h`} />
+            <SceneHeaderMetric label="Energy Draw" value={`${props.sourcePowerKw.toFixed(1)} kW`} />
+          </div>
+        </div>
       </div>
       <div className="absolute bottom-5 right-5 z-10">
         <button

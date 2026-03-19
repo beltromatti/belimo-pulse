@@ -657,22 +657,9 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
           </aside>
 
           <section
-            className={`flex flex-col gap-4 transition-[margin] duration-300 ${
-              isLeftDrawerOpen ? "xl:ml-[23rem]" : ""
-            } ${isRightDrawerOpen ? "xl:mr-[23rem]" : ""}`}
+            className="flex flex-col gap-6"
           >
-            <div className="grid gap-3 md:grid-cols-4">
-              <MetricCard label="Unit" value={initial.blueprint.building.name} tone="dark" />
-              <MetricCard label="Total Air Flow" value={`${totalAirflow.toFixed(0)} m³/h`} />
-              <MetricCard label="Energy Draw" value={`${sourcePower.toFixed(1)} kW`} />
-              <MetricCard
-                label="System Status"
-                value={activeAlerts === 0 ? "Nominal" : `${activeAlerts} Alerts`}
-                status={connectionState}
-              />
-            </div>
-
-            <div>
+            <div className="-mx-4 -mt-4 sm:-mx-6 lg:-mx-8">
               <RuntimeScene
                 blueprint={initial.blueprint}
                 products={initial.products}
@@ -681,10 +668,16 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
                 selectedZoneId={selectedZoneId}
                 worstZoneId={deferredRuntime.twin?.summary.worstZoneId ?? null}
                 onSelectZone={setSelectedZoneId}
+                totalAirflowM3H={totalAirflow}
+                sourcePowerKw={sourcePower}
               />
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+            <div
+              className={`grid gap-4 transition-[margin] duration-300 ${
+                isLeftDrawerOpen ? "xl:ml-[23rem]" : ""
+              } ${isRightDrawerOpen ? "xl:mr-[23rem]" : ""} lg:grid-cols-[1.15fr_0.85fr]`}
+            >
               <CardBlock>
                 <div className="flex items-center justify-between">
                   <SectionEyebrow label="Operational Story" />
@@ -908,36 +901,6 @@ function StatusDot({ state }: { state: "connecting" | "live" | "offline" }) {
             : "bg-rose-500"
       }`}
     />
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  tone = "light",
-  status,
-}: {
-  label: string;
-  value: string;
-  tone?: "light" | "dark";
-  status?: "connecting" | "live" | "offline";
-}) {
-  return (
-    <div
-      className={`rounded-[1.6rem] border px-4 py-4 ${
-        tone === "dark"
-          ? "border-slate-950/90 bg-slate-950 text-white"
-          : "border-white/60 bg-white/72 text-slate-950"
-      }`}
-    >
-      <p className={`text-xs font-medium uppercase tracking-[0.28em] ${tone === "dark" ? "text-white/55" : "text-slate-500"}`}>
-        {label}
-      </p>
-      <div className="mt-3 flex items-center gap-3">
-        <p className="text-2xl font-semibold tracking-[-0.04em]">{value}</p>
-        {status ? <StatusDot state={status} /> : null}
-      </div>
-    </div>
   );
 }
 
