@@ -99,18 +99,20 @@ jobs:
           ssh -i "$HOME/.ssh/belimo" "${AWS_EC2_USER}@${AWS_EC2_HOST}" \
             "BACKEND_ENV_FILE_B64='${BACKEND_ENV_FILE_B64}' GHCR_PULL_TOKEN='${GHCR_PULL_TOKEN}' GHCR_USERNAME='${GHCR_USERNAME}' IMAGE_REF='${IMAGE_REF}' IMAGE_REPOSITORY='${IMAGE_REPOSITORY}' bash -s" <<'EOF'
           set -euo pipefail
-          mkdir -p /opt/belimo-pulse/backend
-          mkdir -p /opt/belimo-pulse/caddy/conf /opt/belimo-pulse/caddy/data /opt/belimo-pulse/caddy/config
+          sudo install -d -m 755 /opt/belimo-pulse/backend
+          sudo install -d -m 755 /opt/belimo-pulse/caddy/conf
+          sudo install -d -m 755 /opt/belimo-pulse/caddy/data
+          sudo install -d -m 755 /opt/belimo-pulse/caddy/config
           public_ip="$(curl -fsS http://169.254.169.254/latest/meta-data/public-ipv4)"
           public_host="${public_ip}.sslip.io"
 
-          cat > /opt/belimo-pulse/caddy/conf/Caddyfile <<CADDYFILE
+          sudo tee /opt/belimo-pulse/caddy/conf/Caddyfile >/dev/null <<CADDYFILE
           ${public_host} {
             reverse_proxy belimo-pulse-backend:8080
           }
           CADDYFILE
 
-          printf '%s' "$BACKEND_ENV_FILE_B64" | base64 -d > /opt/belimo-pulse/backend/.env
+          printf '%s' "$BACKEND_ENV_FILE_B64" | base64 -d | sudo tee /opt/belimo-pulse/backend/.env >/dev/null
           echo "$GHCR_PULL_TOKEN" | sudo docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
           sudo docker pull "$IMAGE_REF"
           sudo docker pull caddy:2
