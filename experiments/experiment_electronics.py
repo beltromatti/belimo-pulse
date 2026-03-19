@@ -1,16 +1,17 @@
 """
 ActuatorIQ — Electronic Diagnostics Experiment
 =================================================
-Tests the electrical and thermal health of the actuator by analyzing
-the relationship between power, torque, and temperature.
+Tests the electrical health of the actuator by mapping power consumption
+across the full stroke and checking consistency.
 
 What this reveals:
-  1. Motor efficiency (torque/power ratio) — degrades with winding issues
-  2. Thermal time constant — how fast PCB heats under load
-  3. Idle power draw — electronics baseline consumption
-  4. Power per degree of rotation — energy cost of movement
-  5. Thermal recovery — how fast it cools after load stops
-  6. Power anomalies — spikes that indicate electronics faults
+  1. Idle power draw — electronics baseline vs 200mW spec
+  2. Power-by-position map — electrical fingerprint of the actuator
+  3. Directional power asymmetry — opening vs closing power differences
+  4. Power-torque divergence — positions where electrical losses dominate
+  5. Stroke-to-stroke consistency — repeatability of power draw
+  6. Energy per stroke — cost of specific moves
+  7. Power anomalies — spikes that indicate electronics faults
 
 Usage:
   python experiment_electronics.py --test-number 500
@@ -27,7 +28,6 @@ from pathlib import Path
 from influxdb_client import InfluxDBClient
 from influxdb_client.client.write_api import SYNCHRONOUS, WritePrecision
 
-# InfluxDB config (same as demo repo)
 URL = "http://192.168.3.14:8086"
 TOKEN = "pf-OGC6AQFmKy64gOzRM12DZrCuavnWeMgRZ2kDMOk8LYK22evDJnoyKGcmY49EgT8HnMDE9GPQeg30vXeHsRQ=="
 ORG = "belimo"
@@ -72,7 +72,6 @@ def read_latest():
 
 
 def sample(start_time):
-    """Take one measurement sample and return as dict."""
     row = read_latest()
     if row is None:
         return None
@@ -97,6 +96,38 @@ def print_sample(s):
     sys.stdout.flush()
 
 
+def wait_and_sample(target, test_number, start, all_samples, phase, hold_s=2.0, extra_tags=None):
+    """Wait for actuator to reach target, then hold and collect samples."""
+    timeout = 30
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        s = sample(start)
+        if s:
+            s["phase"] = phase
+            if extra_tags:
+                s.update(extra_tags)
+            all_samples.append(s)
+            print_sample(s)
+            if abs(s["position"] - target) < 2.0:
+                break
+        time.sleep(0.1)
+
+    hold_samples = []
+    t_hold = time.time()
+    while time.time() - t_hold < hold_s:
+        s = sample(start)
+        if s:
+            s["phase"] = phase
+            if extra_tags:
+                s.update(extra_tags)
+            all_samples.append(s)
+            hold_samples.append(s)
+            print_sample(s)
+        time.sleep(0.2)
+
+    return hold_samples
+
+
 def run_electronic_diagnostics(test_number: int):
     print(f"\n{'='*60}")
     print(f"  Electronic Diagnostics (test #{test_number})")
@@ -111,9 +142,9 @@ def run_electronic_diagnostics(test_number: int):
     print(f"\n  PHASE 1: Idle baseline — measuring resting power + temperature")
     print(f"  Holding at 50% for 30 seconds...\n")
     write_setpoint(50, test_number)
-    time.sleep(5)  # let it reach position
+    time.sleep(5)
 
-    for _ in range(60):  # ~30 seconds at 0.5s intervals
+    for _ in range(60):
         s = sample(start)
         if s:
             s["phase"] = "idle"
@@ -128,68 +159,138 @@ def run_electronic_diagnostics(test_number: int):
     print(f"  Idle baseline: {idle_power:.1f} mW, {idle_temp:.1f}°C")
 
     # =========================================================
-    # PHASE 2: Continuous load — rapid back-and-forth cycling
-    # Run the actuator hard for 3 minutes to heat it up
+    # PHASE 2: Power Map — sweep 0→100→0 measuring power at
+    # each position. Builds a power-by-position profile.
     # =========================================================
-    print(f"\n  PHASE 2: Continuous load — cycling 20%-80% for 3 minutes")
-    print(f"  Monitoring power draw and temperature rise...\n")
+    print(f"\n  PHASE 2: Power Map — sweep with power measurement at each step")
+    print(f"  50 steps per direction, 2s hold per step...\n")
 
-    load_start = time.time()
-    cycle_count = 0
-    target = 80
+    step_count = 25
+    positions = np.linspace(0, 100, step_count + 1)
+    opening_bins = {}
+    closing_bins = {}
 
-    while time.time() - load_start < 180:  # 3 minutes
-        write_setpoint(target, test_number)
-        # Flip target every ~10 seconds worth of samples
-        elapsed_in_cycle = (time.time() - load_start) % 10
-        if elapsed_in_cycle < 0.1:
-            target = 80 if target == 20 else 20
-            cycle_count += 1
+    write_setpoint(0, test_number)
+    time.sleep(8)
 
-        s = sample(start)
-        if s:
-            s["phase"] = "load"
-            s["cycle"] = cycle_count
-            all_samples.append(s)
-            print_sample(s)
-        time.sleep(0.1)
+    print(f"  Opening sweep: 0% → 100%")
+    for pos in positions:
+        write_setpoint(float(pos), test_number)
+        hold = wait_and_sample(
+            float(pos), test_number, start, all_samples,
+            phase="power_map",
+            hold_s=2.0,
+            extra_tags={"sweep_direction": "opening", "target_pos": float(pos)},
+        )
+        if hold:
+            bin_key = int(round(pos / 5) * 5)
+            opening_bins.setdefault(bin_key, []).extend(hold)
     print()
 
-    load_samples = [s for s in all_samples if s["phase"] == "load"]
-    load_power = np.mean([s["power_mw"] for s in load_samples])
-    load_temp_start = load_samples[0]["temperature_c"]
-    load_temp_end = load_samples[-1]["temperature_c"]
-    temp_rise = load_temp_end - load_temp_start
-    print(f"  Under load: avg {load_power:.1f} mW, temp rose {temp_rise:.1f}°C")
-    print(f"  ({load_temp_start:.1f}°C → {load_temp_end:.1f}°C)")
-
-    # =========================================================
-    # PHASE 3: Cooldown — stop and watch temperature decay
-    # =========================================================
-    print(f"\n  PHASE 3: Cooldown — actuator stopped, monitoring temp decay")
-    print(f"  Holding at 50% for 2 minutes...\n")
-    write_setpoint(50, test_number)
-    time.sleep(3)  # let it reach 50%
-
-    for _ in range(240):  # ~2 minutes
-        s = sample(start)
-        if s:
-            s["phase"] = "cooldown"
-            all_samples.append(s)
-            print_sample(s)
-        time.sleep(0.5)
+    print(f"  Closing sweep: 100% → 0%")
+    for pos in reversed(positions):
+        write_setpoint(float(pos), test_number)
+        hold = wait_and_sample(
+            float(pos), test_number, start, all_samples,
+            phase="power_map",
+            hold_s=2.0,
+            extra_tags={"sweep_direction": "closing", "target_pos": float(pos)},
+        )
+        if hold:
+            bin_key = int(round(pos / 5) * 5)
+            closing_bins.setdefault(bin_key, []).extend(hold)
     print()
 
-    cool_samples = [s for s in all_samples if s["phase"] == "cooldown"]
-    cool_temp_start = cool_samples[0]["temperature_c"]
-    cool_temp_end = cool_samples[-1]["temperature_c"]
-    temp_drop = cool_temp_start - cool_temp_end
-    print(f"  Cooldown: temp dropped {temp_drop:.1f}°C")
-    print(f"  ({cool_temp_start:.1f}°C → {cool_temp_end:.1f}°C)")
+    power_map = []
+    all_bin_keys = sorted(set(list(opening_bins.keys()) + list(closing_bins.keys())))
+    for bk in all_bin_keys:
+        entry = {"position": bk}
+        if bk in opening_bins:
+            entry["opening_power_mw"] = round(np.mean([s["power_mw"] for s in opening_bins[bk]]), 1)
+            entry["opening_torque_nmm"] = round(np.mean([abs(s["torque_nmm"]) for s in opening_bins[bk]]), 3)
+        if bk in closing_bins:
+            entry["closing_power_mw"] = round(np.mean([s["power_mw"] for s in closing_bins[bk]]), 1)
+            entry["closing_torque_nmm"] = round(np.mean([abs(s["torque_nmm"]) for s in closing_bins[bk]]), 3)
+        power_map.append(entry)
+
+    opening_powers = [e["opening_power_mw"] for e in power_map if "opening_power_mw" in e]
+    closing_powers = [e["closing_power_mw"] for e in power_map if "closing_power_mw" in e]
+    if opening_powers and closing_powers:
+        avg_opening = np.mean(opening_powers)
+        avg_closing = np.mean(closing_powers)
+        denom = max(avg_opening, avg_closing, 0.01)
+        directional_asymmetry = round(abs(avg_opening - avg_closing) / denom * 100, 1)
+    else:
+        directional_asymmetry = 0.0
+
+    divergence_entries = []
+    for entry in power_map:
+        op = entry.get("opening_power_mw", 0)
+        ot = entry.get("opening_torque_nmm", 0)
+        cp = entry.get("closing_power_mw", 0)
+        ct = entry.get("closing_torque_nmm", 0)
+        avg_p = (op + cp) / 2 if op and cp else max(op, cp)
+        avg_t = (ot + ct) / 2 if ot and ct else max(ot, ct)
+        if avg_t > 0.05 and avg_p > 0:
+            ratio = avg_p / (avg_t * 1000)
+            divergence_entries.append({"position": entry["position"], "power_torque_ratio": round(ratio, 3)})
+
+    if divergence_entries:
+        mean_ratio = np.mean([d["power_torque_ratio"] for d in divergence_entries])
+        for d in divergence_entries:
+            d["divergence"] = round(d["power_torque_ratio"] / mean_ratio, 2) if mean_ratio > 0 else 1.0
+    else:
+        mean_ratio = 0
+
+    print(f"  Power map: {len(power_map)} bins collected")
+    print(f"  Directional asymmetry: {directional_asymmetry:.1f}%")
 
     # =========================================================
-    # PHASE 4: Single strokes with precise power measurement
-    # Move from known positions and measure energy per stroke
+    # PHASE 3: Stroke Consistency — 5 identical 20→80 strokes
+    # =========================================================
+    print(f"\n  PHASE 3: Stroke Consistency — 5 identical 20%→80% strokes\n")
+
+    consistency_energies = []
+    consistency_powers = []
+
+    for rep in range(5):
+        write_setpoint(20, test_number)
+        time.sleep(6)
+
+        stroke_start = time.time()
+        stroke_samples = []
+        write_setpoint(80, test_number)
+
+        while time.time() - stroke_start < 20:
+            s = sample(start)
+            if s:
+                s["phase"] = "consistency"
+                s["repetition"] = rep
+                stroke_samples.append(s)
+                all_samples.append(s)
+                print_sample(s)
+                if abs(s["position"] - 80) < 2.0 and time.time() - stroke_start > 2:
+                    break
+            time.sleep(0.05)
+
+        if stroke_samples:
+            powers = [s["power_w"] for s in stroke_samples]
+            duration = stroke_samples[-1]["time_s"] - stroke_samples[0]["time_s"]
+            energy = np.mean(powers) * duration if duration > 0 else 0
+            consistency_energies.append(energy * 1000)
+            consistency_powers.append(np.mean([s["power_mw"] for s in stroke_samples]))
+    print()
+
+    if consistency_energies and np.mean(consistency_energies) > 0:
+        stroke_cv = round(np.std(consistency_energies) / np.mean(consistency_energies), 3)
+    else:
+        stroke_cv = 0.0
+
+    print(f"  Stroke energies (mJ): {[round(e, 1) for e in consistency_energies]}")
+    print(f"  Consistency CV: {stroke_cv}")
+
+    # =========================================================
+    # PHASE 4: Energy per stroke — specific moves
     # =========================================================
     print(f"\n  PHASE 4: Energy per stroke — measuring power for specific moves")
 
@@ -198,11 +299,9 @@ def run_electronic_diagnostics(test_number: int):
 
     for from_pos, to_pos in strokes:
         print(f"\n  Stroke: {from_pos}% → {to_pos}%")
-        # Move to start
         write_setpoint(from_pos, test_number)
-        time.sleep(8)  # wait for arrival
+        time.sleep(8)
 
-        # Now move and measure
         stroke_start = time.time()
         stroke_samples = []
         write_setpoint(to_pos, test_number)
@@ -214,26 +313,20 @@ def run_electronic_diagnostics(test_number: int):
                 s["stroke_from"] = from_pos
                 s["stroke_to"] = to_pos
                 stroke_samples.append(s)
+                all_samples.append(s)
                 print_sample(s)
-
-                # Done when position is within 2% of target
-                if abs(s["position"] - to_pos) < 2.0 and s["time_s"] > stroke_start - start + 2:
+                if abs(s["position"] - to_pos) < 2.0 and time.time() - stroke_start > 2:
                     break
             time.sleep(0.05)
 
-        all_samples.extend(stroke_samples)
-
-        # Compute energy for this stroke
         if stroke_samples:
             powers = [s["power_w"] for s in stroke_samples]
             duration = stroke_samples[-1]["time_s"] - stroke_samples[0]["time_s"]
             avg_power = np.mean(powers)
             max_power = max(powers)
-            # Energy = average power × time (in joules)
             energy_j = avg_power * duration if duration > 0 else 0
             stroke_size = abs(to_pos - from_pos)
             energy_per_degree = energy_j / (stroke_size * 0.95) if stroke_size > 0 else 0
-            # 0.95 factor: 100% travel = 95° rotation for LM series
 
             stroke_results.append({
                 "from": from_pos, "to": to_pos,
@@ -247,84 +340,40 @@ def run_electronic_diagnostics(test_number: int):
     print()
 
     # =========================================================
-    # Compute derived electronic metrics
+    # Compute summary metrics
     # =========================================================
     print(f"\n{'='*60}")
     print(f"  ELECTRONIC HEALTH METRICS")
     print(f"{'='*60}")
 
-    # Motor efficiency: torque output / power input during motion
-    moving = [s for s in all_samples
-              if s["phase"] == "load" and abs(s["torque_nmm"]) > 0.1 and s["power_w"] > 0.001]
-    if moving:
-        efficiencies = [abs(s["torque_nmm"]) / (s["power_w"] * 1000) for s in moving
-                        if s["power_w"] > 0.001]
-        avg_efficiency = np.mean(efficiencies) if efficiencies else 0
-        efficiency_cv = np.std(efficiencies) / avg_efficiency if avg_efficiency > 0 else 0
-    else:
-        avg_efficiency = 0
-        efficiency_cv = 0
+    idle_status = "OK" if idle_power < 300 else "HIGH"
+    print(f"\n  Idle power draw:        {idle_power:.1f} mW")
+    print(f"  Spec (LM24A):           200 mW at rest")
+    print(f"  Status:                 {idle_status}")
 
-    # Thermal time constant (tau): time to reach 63.2% of final temp rise
-    if load_samples and temp_rise > 0.5:
-        target_temp = load_temp_start + 0.632 * temp_rise
-        tau_samples = [s for s in load_samples if s["temperature_c"] >= target_temp]
-        if tau_samples:
-            tau = tau_samples[0]["time_s"] - load_samples[0]["time_s"]
-        else:
-            tau = None
-    else:
-        tau = None
+    print(f"\n  Power map bins:         {len(power_map)}")
+    print(f"  Directional asymmetry:  {directional_asymmetry:.1f}%")
+    asym_status = "SYMMETRIC" if directional_asymmetry < 15 else "ASYMMETRIC"
+    print(f"  Status:                 {asym_status}")
 
-    # Thermal recovery rate: time to drop 50% of temp rise during cooldown
-    if cool_samples and temp_drop > 0.2:
-        half_target = cool_temp_start - temp_drop * 0.5
-        half_samples = [s for s in cool_samples if s["temperature_c"] <= half_target]
-        if half_samples:
-            recovery_half = half_samples[0]["time_s"] - cool_samples[0]["time_s"]
-        else:
-            recovery_half = None
-    else:
-        recovery_half = None
+    if divergence_entries:
+        max_div = max(divergence_entries, key=lambda d: abs(d["divergence"] - 1.0))
+        print(f"\n  Power-torque divergence:")
+        print(f"  Mean ratio:             {mean_ratio:.3f} mW/Nmm")
+        print(f"  Max divergence:         {max_div['divergence']:.2f}x at {max_div['position']}%")
 
-    # Power anomaly detection: any sample where power > 3x average during motion
-    motion_power = [s["power_mw"] for s in all_samples
-                    if s["phase"] in ("load", "stroke") and s["power_mw"] > idle_power * 1.5]
-    if motion_power:
-        mean_motion_power = np.mean(motion_power)
-        power_anomalies = [s for s in all_samples
-                          if s["power_mw"] > mean_motion_power * 3]
+    print(f"\n  Stroke consistency:     CV = {stroke_cv}")
+    consist_status = "CONSISTENT" if stroke_cv < 0.1 else "INCONSISTENT"
+    print(f"  Status:                 {consist_status}")
+
+    motion_samples = [s for s in all_samples if s["phase"] in ("power_map", "consistency", "stroke")]
+    motion_power_vals = [s["power_mw"] for s in motion_samples if s["power_mw"] > idle_power * 1.5]
+    if motion_power_vals:
+        mean_motion_power = np.mean(motion_power_vals)
+        power_anomalies = [s for s in all_samples if s["power_mw"] > mean_motion_power * 3]
     else:
         mean_motion_power = idle_power
         power_anomalies = []
-
-    # Print results
-    print(f"\n  Idle power draw:        {idle_power:.1f} mW")
-    print(f"  Spec (LM24A):           200 mW at rest")
-    idle_status = "OK" if idle_power < 300 else "HIGH"
-    print(f"  Status:                 {idle_status}")
-
-    print(f"\n  Avg power under load:   {load_power:.1f} mW")
-    print(f"  Spec (LM24A):           1000 mW moving")
-
-    print(f"\n  Motor efficiency:       {avg_efficiency:.4f} Nmm/mW")
-    print(f"  Efficiency stability:   CV = {efficiency_cv:.2f}")
-    eff_status = "STABLE" if efficiency_cv < 0.3 else "UNSTABLE"
-    print(f"  Status:                 {eff_status}")
-
-    print(f"\n  Temperature rise:       {temp_rise:.1f}°C over 3 min load")
-    if tau:
-        print(f"  Thermal time constant:  {tau:.0f} seconds")
-    else:
-        print(f"  Thermal time constant:  Could not compute (rise too small)")
-    print(f"  Temp at idle:           {idle_temp:.1f}°C")
-    print(f"  Temp after load:        {load_temp_end:.1f}°C")
-
-    if recovery_half:
-        print(f"\n  Thermal recovery (50%): {recovery_half:.0f} seconds")
-    else:
-        print(f"\n  Thermal recovery:       Insufficient cooldown data")
-
     print(f"\n  Power anomalies:        {len(power_anomalies)} spikes detected")
 
     print(f"\n  Energy per stroke:")
@@ -334,7 +383,7 @@ def run_electronic_diagnostics(test_number: int):
               f"(avg {sr['avg_power_mw']:.0f} mW, peak {sr['max_power_mw']:.0f} mW)")
 
     # =========================================================
-    # Save everything
+    # Save
     # =========================================================
     df = pd.DataFrame(all_samples)
     csv_path = OUTPUT_DIR / f"electronics_test{test_number}.csv"
@@ -349,14 +398,12 @@ def run_electronic_diagnostics(test_number: int):
             "idle_power_mw": round(idle_power, 1),
             "idle_power_status": idle_status,
             "idle_temp_c": round(idle_temp, 1),
-            "load_avg_power_mw": round(load_power, 1),
-            "temp_rise_c": round(temp_rise, 1),
-            "temp_after_load_c": round(load_temp_end, 1),
-            "thermal_time_constant_s": round(tau, 1) if tau else None,
-            "thermal_recovery_half_s": round(recovery_half, 1) if recovery_half else None,
-            "motor_efficiency_nmm_per_mw": round(avg_efficiency, 4),
-            "efficiency_cv": round(efficiency_cv, 3),
-            "efficiency_status": eff_status,
+            "power_map": power_map,
+            "directional_asymmetry_pct": directional_asymmetry,
+            "directional_asymmetry_status": asym_status,
+            "power_torque_divergence": divergence_entries,
+            "stroke_consistency_cv": stroke_cv,
+            "stroke_consistency_status": consist_status,
             "power_anomaly_count": len(power_anomalies),
             "stroke_energy": stroke_results,
         },
