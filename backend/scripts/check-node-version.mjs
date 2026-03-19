@@ -11,7 +11,7 @@ const target = process.argv[2] ?? "this workspace";
 console.error(
   [
     `${target} requires Node.js 20.9 through 22.x.`,
-    `Detected ${process.versions.node}.`,
+    `Detected ${process.version}.`,
     "Use a supported runtime before starting dev/build tasks.",
     "Suggested options:",
     "- if you use nvm: nvm use",

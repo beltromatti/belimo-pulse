@@ -8,13 +8,13 @@
   },
   "main": "dist/server.js",
   "scripts": {
-    "predev": "node ../scripts/check-node-version.mjs backend",
+    "predev": "node ./scripts/check-node-version.mjs backend",
     "dev": "tsx watch src/server.ts",
-    "prebuild": "node ../scripts/check-node-version.mjs backend",
+    "prebuild": "node ./scripts/check-node-version.mjs backend",
     "build": "tsc -p tsconfig.json",
-    "pretest": "node ../scripts/check-node-version.mjs backend",
+    "pretest": "node ./scripts/check-node-version.mjs backend",
     "test": "node --import tsx --test src/engines.test.ts",
-    "prestart": "node ../scripts/check-node-version.mjs backend",
+    "prestart": "node ./scripts/check-node-version.mjs backend",
     "start": "node dist/server.js"
   },
   "keywords": [

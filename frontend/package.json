@@ -6,13 +6,13 @@
     "node": ">=20.9 <23"
   },
   "scripts": {
-    "predev": "node ../scripts/check-node-version.mjs frontend",
+    "predev": "node ./scripts/check-node-version.mjs frontend",
     "dev": "next dev",
-    "prebuild": "node ../scripts/check-node-version.mjs frontend",
+    "prebuild": "node ./scripts/check-node-version.mjs frontend",
     "build": "next build",
     "build:webpack": "next build --webpack",
     "postbuild": "node scripts/prepare-vercel-root.mjs",
-    "prestart": "node ../scripts/check-node-version.mjs frontend",
+    "prestart": "node ./scripts/check-node-version.mjs frontend",
     "start": "next start",
     "lint": "eslint"
   },
