@@ -90,8 +90,6 @@ jobs:
           AWS_EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
           AWS_EC2_USER: ${{ secrets.AWS_EC2_USER }}
           BACKEND_ENV_FILE_B64: ${{ secrets.BACKEND_ENV_FILE_B64 }}
-          BACKEND_DATABASE_ENV_B64: ${{ secrets.BACKEND_DATABASE_ENV_B64 }}
-          POSTGRES_ENV_FILE_B64: ${{ secrets.POSTGRES_ENV_FILE_B64 }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           GHCR_USERNAME: ${{ needs.build_image.outputs.ghcr_username }}
           IMAGE_REF: ${{ needs.build_image.outputs.image_ref }}
@@ -99,7 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i "$HOME/.ssh/belimo" "${AWS_EC2_USER}@${AWS_EC2_HOST}" \
-            "BACKEND_ENV_FILE_B64='${BACKEND_ENV_FILE_B64}' BACKEND_DATABASE_ENV_B64='${BACKEND_DATABASE_ENV_B64}' POSTGRES_ENV_FILE_B64='${POSTGRES_ENV_FILE_B64}' GHCR_PULL_TOKEN='${GHCR_PULL_TOKEN}' GHCR_USERNAME='${GHCR_USERNAME}' IMAGE_REF='${IMAGE_REF}' IMAGE_REPOSITORY='${IMAGE_REPOSITORY}' bash -s" <<'EOF'
+            "BACKEND_ENV_FILE_B64='${BACKEND_ENV_FILE_B64}' GHCR_PULL_TOKEN='${GHCR_PULL_TOKEN}' GHCR_USERNAME='${GHCR_USERNAME}' IMAGE_REF='${IMAGE_REF}' IMAGE_REPOSITORY='${IMAGE_REPOSITORY}' bash -s" <<'EOF'
           set -euo pipefail
           sudo install -d -m 755 /opt/belimo-pulse/backend
           sudo install -d -m 755 /opt/belimo-pulse/postgres
@@ -117,8 +115,8 @@ jobs:
           CADDYFILE
 
           printf '%s' "$BACKEND_ENV_FILE_B64" | base64 -d | sudo tee /opt/belimo-pulse/backend/.env.base >/dev/null
-          printf '%s' "$BACKEND_DATABASE_ENV_B64" | base64 -d | sudo tee /opt/belimo-pulse/backend/database.env >/dev/null
-          printf '%s' "$POSTGRES_ENV_FILE_B64" | base64 -d | sudo tee /opt/belimo-pulse/postgres/postgres.env >/dev/null
+          sudo test -s /opt/belimo-pulse/backend/database.env
+          sudo test -s /opt/belimo-pulse/postgres/postgres.env
           sudo chmod 600 /opt/belimo-pulse/backend/.env.base /opt/belimo-pulse/backend/database.env /opt/belimo-pulse/postgres/postgres.env
           sudo sh -c "grep -v -E '^(DATABASE_URL|DATABASE_SSL)=' /opt/belimo-pulse/backend/.env.base > /opt/belimo-pulse/backend/.env.runtime"
           sudo sh -c "cat /opt/belimo-pulse/backend/database.env >> /opt/belimo-pulse/backend/.env.runtime"
