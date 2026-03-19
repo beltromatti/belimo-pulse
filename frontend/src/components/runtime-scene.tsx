@@ -42,6 +42,17 @@ type RoomBadgeProps = {
   label: string;
   isSelected: boolean;
   isWorstZone: boolean;
+  onPointerEnter?: () => void;
+  onPointerLeave?: () => void;
+};
+
+type DeviceHoverCardProps = {
+  device: DeviceDefinition;
+  product: ProductDefinition;
+  diagnosis: DeviceDiagnosis | undefined;
+  telemetry: DeviceTelemetryRecord["telemetry"] | null;
+  onPointerEnter?: () => void;
+  onPointerLeave?: () => void;
 };
 
 type FlowRouteProps = {
@@ -52,6 +63,9 @@ type FlowRouteProps = {
 
 const LOCKED_POLAR_ANGLE = 0.96;
 const AUTO_ROTATE_SPEED = 0.45;
+const HORIZONTAL_WALL_COLOR = "#d8e0ea";
+const VERTICAL_WALL_COLOR = "#c6d0dc";
+const WINDOW_TINT_COLOR = "#d4ebff";
 
 function getRoomCenter(space: BuildingBlueprint["spaces"][number]) {
   return new THREE.Vector3(
@@ -97,10 +111,12 @@ function getSpaceColor(zone: ZoneTwinState | undefined) {
   return "#ebe7dd";
 }
 
-function RoomBadge({ zone, label, isSelected, isWorstZone }: RoomBadgeProps) {
+function RoomBadge({ zone, label, isSelected, isWorstZone, onPointerEnter, onPointerLeave }: RoomBadgeProps) {
   return (
     <div
-      className={`pointer-events-none rounded-2xl border px-3 py-2 shadow-[0_16px_36px_rgba(15,23,42,0.16)] backdrop-blur ${
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+      className={`rounded-2xl border px-3 py-2 shadow-[0_16px_36px_rgba(15,23,42,0.16)] backdrop-blur ${
         isSelected ? "min-w-[152px] border-white/75 bg-white/92" : "min-w-[118px] border-white/48 bg-white/82"
       }`}
     >
@@ -141,12 +157,16 @@ function FloatingRoomBadge({
   label,
   isSelected,
   isWorstZone,
+  onPointerEnter,
+  onPointerLeave,
 }: {
   position: [number, number, number];
   zone: ZoneTwinState | undefined;
   label: string;
   isSelected: boolean;
   isWorstZone: boolean;
+  onPointerEnter?: () => void;
+  onPointerLeave?: () => void;
 }) {
   const groupRef = useRef<THREE.Group | null>(null);
   const baseY = position[1];
@@ -163,7 +183,14 @@ function FloatingRoomBadge({
   return (
     <group ref={groupRef} position={position}>
       <Html transform sprite distanceFactor={11}>
-        <RoomBadge zone={zone} label={label} isSelected={isSelected} isWorstZone={isWorstZone} />
+        <RoomBadge
+          zone={zone}
+          label={label}
+          isSelected={isSelected}
+          isWorstZone={isWorstZone}
+          onPointerEnter={onPointerEnter}
+          onPointerLeave={onPointerLeave}
+        />
       </Html>
     </group>
   );
@@ -270,8 +297,138 @@ function WindowStrip({
   return (
     <mesh position={position} rotation={rotation}>
       <planeGeometry args={isVerticalWall ? [1.02, width] : [width, 1.02]} />
-      <meshStandardMaterial color="#dff4ff" transparent opacity={0.55} emissive="#7dd3fc" emissiveIntensity={0.15} />
+      <meshStandardMaterial
+        color={WINDOW_TINT_COLOR}
+        transparent
+        opacity={0.68}
+        emissive="#8ec5f8"
+        emissiveIntensity={0.18}
+      />
     </mesh>
+  );
+}
+
+function formatTelemetryValue(key: string, value: number | string | boolean | null) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "On" : "Off";
+  }
+
+  if (typeof value === "string") {
+    return value.replaceAll("_", " ");
+  }
+
+  const normalizedKey = key.toLowerCase();
+
+  if (normalizedKey.includes("temperature")) {
+    return `${value.toFixed(1)} deg`;
+  }
+
+  if (normalizedKey.includes("humidity")) {
+    return `${value.toFixed(0)}% RH`;
+  }
+
+  if (normalizedKey.includes("co2")) {
+    return `${value.toFixed(0)} ppm`;
+  }
+
+  if (normalizedKey.includes("power")) {
+    return `${value.toFixed(1)} kW`;
+  }
+
+  if (normalizedKey.includes("airflow") || normalizedKey.includes("air_flow")) {
+    return `${value.toFixed(0)} m3/h`;
+  }
+
+  if (normalizedKey.includes("pressure")) {
+    return `${value.toFixed(0)} Pa`;
+  }
+
+  if (normalizedKey.includes("position") || normalizedKey.includes("opening") || normalizedKey.includes("fraction")) {
+    return `${value.toFixed(0)}%`;
+  }
+
+  return `${value.toFixed(1)}`;
+}
+
+function getTelemetryHighlights(telemetry: DeviceTelemetryRecord["telemetry"] | null) {
+  if (!telemetry) {
+    return [];
+  }
+
+  const preferredKeys = [
+    "electrical_power_kw",
+    "damper_position_pct",
+    "actuator_position_pct",
+    "air_flow_m3_h",
+    "airflow_m3_h",
+    "temperature_c",
+    "co2_ppm",
+    "relative_humidity_pct",
+    "static_pressure_pa",
+    "operating_mode",
+  ];
+
+  const entries = preferredKeys
+    .map((key) => [key, telemetry[key]] as const)
+    .filter((entry): entry is [string, number | string | boolean] => entry[1] !== undefined && entry[1] !== null)
+    .slice(0, 2);
+
+  if (entries.length > 0) {
+    return entries.map(([key, value]) => formatTelemetryValue(key, value)).filter((value): value is string => Boolean(value));
+  }
+
+  return Object.entries(telemetry)
+    .filter((entry): entry is [string, number | string | boolean] => entry[1] !== undefined && entry[1] !== null)
+    .slice(0, 2)
+    .map(([key, value]) => formatTelemetryValue(key, value))
+    .filter((value): value is string => Boolean(value));
+}
+
+function DeviceHoverCard({
+  device,
+  product,
+  diagnosis,
+  telemetry,
+  onPointerEnter,
+  onPointerLeave,
+}: DeviceHoverCardProps) {
+  const highlights = getTelemetryHighlights(telemetry);
+  const alertText = diagnosis?.alerts[0] ?? null;
+  const statusTone = diagnosis
+    ? diagnosis.healthScore >= 95
+      ? "#16a34a"
+      : diagnosis.healthScore >= 85
+        ? "#f59e0b"
+        : "#dc2626"
+    : "#94a3b8";
+
+  return (
+    <div
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+      className="min-w-[188px] rounded-2xl border border-white/75 bg-white/94 px-3 py-2 shadow-[0_18px_42px_rgba(15,23,42,0.18)] backdrop-blur"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">{device.id}</p>
+          <p className="mt-1 text-sm font-semibold text-slate-950">
+            {product.brand} {product.subtype.replaceAll("_", " ")}
+          </p>
+        </div>
+        <span className="mt-0.5 h-2.5 w-2.5 rounded-full" style={{ backgroundColor: statusTone }} />
+      </div>
+      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">{device.kind.replaceAll("_", " ")}</p>
+      {highlights.length > 0 ? (
+        <p className="mt-2 text-sm font-medium text-slate-700">{highlights.join(" | ")}</p>
+      ) : null}
+      <p className="mt-2 text-xs text-slate-600">
+        {alertText ?? (diagnosis ? `Health ${diagnosis.healthScore}%` : device.placement)}
+      </p>
+    </div>
   );
 }
 
@@ -412,6 +569,9 @@ function RuntimeSceneContent({
   controlsRef,
 }: RuntimeSceneContentProps) {
   const [hoveredZoneId, setHoveredZoneId] = useState<string | null>(null);
+  const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null);
+  const roomHoverCloseRef = useRef<number | null>(null);
+  const deviceHoverCloseRef = useRef<number | null>(null);
   const twinZones = useMemo(() => new Map((twin?.zones ?? []).map((zone) => [zone.zoneId, zone])), [twin?.zones]);
   const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const telemetryByDeviceId = useMemo(
@@ -458,6 +618,36 @@ function RuntimeSceneContent({
     onSelectZone(zoneId);
   };
 
+  const cancelRoomHoverClose = () => {
+    if (roomHoverCloseRef.current) {
+      window.clearTimeout(roomHoverCloseRef.current);
+      roomHoverCloseRef.current = null;
+    }
+  };
+
+  const scheduleRoomHoverClose = (zoneId: string) => {
+    cancelRoomHoverClose();
+    roomHoverCloseRef.current = window.setTimeout(() => {
+      setHoveredZoneId((current) => (current === zoneId ? null : current));
+      roomHoverCloseRef.current = null;
+    }, 140);
+  };
+
+  const cancelDeviceHoverClose = () => {
+    if (deviceHoverCloseRef.current) {
+      window.clearTimeout(deviceHoverCloseRef.current);
+      deviceHoverCloseRef.current = null;
+    }
+  };
+
+  const scheduleDeviceHoverClose = (deviceId: string) => {
+    cancelDeviceHoverClose();
+    deviceHoverCloseRef.current = window.setTimeout(() => {
+      setHoveredDeviceId((current) => (current === deviceId ? null : current));
+      deviceHoverCloseRef.current = null;
+    }, 140);
+  };
+
   useEffect(() => {
     const controls = controlsRef.current;
 
@@ -468,6 +658,13 @@ function RuntimeSceneContent({
     controls.target.set(0, sceneCenter.y, 0);
     controls.update();
   }, [controlsRef, sceneCenter]);
+
+  useEffect(() => {
+    return () => {
+      cancelRoomHoverClose();
+      cancelDeviceHoverClose();
+    };
+  }, []);
 
   return (
     <>
@@ -554,11 +751,12 @@ function RuntimeSceneContent({
                 onClick={(event) => handleRoomClick(event, space.id)}
                 onPointerOver={(event) => {
                   event.stopPropagation();
+                  cancelRoomHoverClose();
                   setHoveredZoneId(space.id);
                 }}
                 onPointerOut={(event) => {
                   event.stopPropagation();
-                  setHoveredZoneId((current) => (current === space.id ? null : current));
+                  scheduleRoomHoverClose(space.id);
                 }}
               >
                 <meshStandardMaterial color={getSpaceColor(zone)} metalness={0.06} roughness={0.88} />
@@ -573,7 +771,13 @@ function RuntimeSceneContent({
                 smoothness={2}
                 position={[center.x, 1.18, space.layout.origin_m.y]}
               >
-                <meshStandardMaterial color="#f7f5f0" />
+                <meshStandardMaterial
+                  color={HORIZONTAL_WALL_COLOR}
+                  emissive={HORIZONTAL_WALL_COLOR}
+                  emissiveIntensity={0.04}
+                  metalness={0.03}
+                  roughness={0.58}
+                />
               </RoundedBox>
               <RoundedBox
                 args={[space.layout.size_m.width + 0.14, 0.12, 0.16]}
@@ -581,7 +785,13 @@ function RuntimeSceneContent({
                 smoothness={2}
                 position={[center.x, 1.18, space.layout.origin_m.y + space.layout.size_m.depth]}
               >
-                <meshStandardMaterial color="#f7f5f0" />
+                <meshStandardMaterial
+                  color={HORIZONTAL_WALL_COLOR}
+                  emissive={HORIZONTAL_WALL_COLOR}
+                  emissiveIntensity={0.04}
+                  metalness={0.03}
+                  roughness={0.58}
+                />
               </RoundedBox>
               <RoundedBox
                 args={[0.16, 1.26, space.layout.size_m.depth + 0.14]}
@@ -589,7 +799,13 @@ function RuntimeSceneContent({
                 smoothness={2}
                 position={[space.layout.origin_m.x, 0.58, center.z]}
               >
-                <meshStandardMaterial color="#f7f5f0" />
+                <meshStandardMaterial
+                  color={VERTICAL_WALL_COLOR}
+                  emissive={VERTICAL_WALL_COLOR}
+                  emissiveIntensity={0.03}
+                  metalness={0.04}
+                  roughness={0.52}
+                />
               </RoundedBox>
               <RoundedBox
                 args={[0.16, 1.26, space.layout.size_m.depth + 0.14]}
@@ -597,7 +813,13 @@ function RuntimeSceneContent({
                 smoothness={2}
                 position={[space.layout.origin_m.x + space.layout.size_m.width, 0.58, center.z]}
               >
-                <meshStandardMaterial color="#f7f5f0" />
+                <meshStandardMaterial
+                  color={VERTICAL_WALL_COLOR}
+                  emissive={VERTICAL_WALL_COLOR}
+                  emissiveIntensity={0.03}
+                  metalness={0.04}
+                  roughness={0.52}
+                />
               </RoundedBox>
 
               {space.envelope.transparent_surfaces.map((surface) => {
@@ -668,6 +890,8 @@ function RuntimeSceneContent({
                   label={space.name}
                   isSelected={isSelected}
                   isWorstZone={isWorstZone}
+                  onPointerEnter={cancelRoomHoverClose}
+                  onPointerLeave={() => scheduleRoomHoverClose(space.id)}
                 />
               ) : null}
             </group>
@@ -697,6 +921,15 @@ function RuntimeSceneContent({
               diagnosis={diagnosis}
             >
               <group
+                onPointerOver={(event) => {
+                  event.stopPropagation();
+                  cancelDeviceHoverClose();
+                  setHoveredDeviceId(device.id);
+                }}
+                onPointerOut={(event) => {
+                  event.stopPropagation();
+                  scheduleDeviceHoverClose(device.id);
+                }}
                 position={[
                   point.x + transform.positionOffset[0],
                   point.y + transform.positionOffset[1],
@@ -707,6 +940,27 @@ function RuntimeSceneContent({
               >
                 <RuntimeDeviceModel productId={product.id} device={device} telemetry={reading?.telemetry ?? null} />
               </group>
+              {hoveredDeviceId === device.id ? (
+                <Html
+                  position={[
+                    point.x + transform.positionOffset[0],
+                    point.y + transform.positionOffset[1] + 0.72,
+                    point.z + transform.positionOffset[2],
+                  ]}
+                  transform
+                  sprite
+                  distanceFactor={11}
+                >
+                  <DeviceHoverCard
+                    device={device}
+                    product={product}
+                    diagnosis={diagnosis}
+                    telemetry={reading?.telemetry ?? null}
+                    onPointerEnter={cancelDeviceHoverClose}
+                    onPointerLeave={() => scheduleDeviceHoverClose(device.id)}
+                  />
+                </Html>
+              ) : null}
             </DeviceHealthIndicator>
           );
         })}
@@ -777,9 +1031,14 @@ function PowerIcon() {
 
 export function RuntimeScene(props: RuntimeSceneProps) {
   const controlsRef = useRef<import("three-stdlib").OrbitControls | null>(null);
+  const [isSceneHovered, setIsSceneHovered] = useState(false);
 
   return (
-    <div className="relative h-[100svh] min-h-[720px] w-full overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.92),rgba(224,232,240,0.75)_42%,rgba(199,211,224,0.96)_100%)]">
+    <div
+      className="relative h-[100svh] min-h-[720px] w-full overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.92),rgba(224,232,240,0.75)_42%,rgba(199,211,224,0.96)_100%)]"
+      onPointerEnter={() => setIsSceneHovered(true)}
+      onPointerLeave={() => setIsSceneHovered(false)}
+    >
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-32 bg-gradient-to-b from-white/55 to-transparent" />
       <div className="pointer-events-none absolute inset-x-4 top-4 z-10 sm:inset-x-6 sm:top-5">
         <div className="relative flex flex-wrap items-center justify-between gap-3 rounded-full border border-white/55 bg-white/62 px-4 py-3 text-slate-600 backdrop-blur">
@@ -831,7 +1090,7 @@ export function RuntimeScene(props: RuntimeSceneProps) {
         dpr={1}
         gl={{ antialias: false, powerPreference: "high-performance" }}
       >
-        <RuntimeSceneContent {...props} autoRotateActive controlsRef={controlsRef} />
+        <RuntimeSceneContent {...props} autoRotateActive={!isSceneHovered} controlsRef={controlsRef} />
       </Canvas>
     </div>
   );
