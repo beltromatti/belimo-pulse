@@ -258,7 +258,7 @@ Start Hackathon 2026
   To run:
   cd experiments
   source venv/bin/activate
-  export ANTHROPIC_API_KEY=sk-ant-...
+  export ANTHROPIC_API_KEY=<your-key-here>
 
   # CLI mode (quick test):
   python agent.py "Check this actuator's health"
@@ -295,3 +295,13 @@ Start Hackathon 2026
   ├──────────────────────────────┼──────────┼──────────────────────────────┤
   │ compare_profiles             │ Advisory │ Healthy vs faulty comparison │
   └──────────────────────────────┴──────────┴─────────────────────────────
+
+
+
+
+
+
+  To launch the dashboard:
+  cd backend/mcp
+  export ANTHROPIC_API_KEY=<your-key-here>
+  ../../experiments/venv/bin/streamlit run dashboard.py
