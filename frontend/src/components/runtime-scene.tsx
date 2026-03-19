@@ -50,7 +50,6 @@ type FlowRouteProps = {
 };
 
 const LOCKED_POLAR_ANGLE = 0.96;
-const AUTO_ROTATE_IDLE_DELAY_MS = 5000;
 const AUTO_ROTATE_SPEED = 0.45;
 
 function getRoomCenter(space: BuildingBlueprint["spaces"][number]) {
@@ -100,7 +99,7 @@ function getSpaceColor(zone: ZoneTwinState | undefined) {
 function RoomBadge({ zone, label, isSelected, isWorstZone }: RoomBadgeProps) {
   return (
     <div
-      className={`rounded-2xl border px-3 py-2 shadow-[0_16px_36px_rgba(15,23,42,0.16)] backdrop-blur ${
+      className={`pointer-events-none rounded-2xl border px-3 py-2 shadow-[0_16px_36px_rgba(15,23,42,0.16)] backdrop-blur ${
         isSelected ? "min-w-[152px] border-white/75 bg-white/92" : "min-w-[118px] border-white/48 bg-white/82"
       }`}
     >
@@ -411,6 +410,7 @@ function RuntimeSceneContent({
   autoRotateActive,
   controlsRef,
 }: RuntimeSceneContentProps) {
+  const [hoveredZoneId, setHoveredZoneId] = useState<string | null>(null);
   const twinZones = useMemo(() => new Map((twin?.zones ?? []).map((zone) => [zone.zoneId, zone])), [twin?.zones]);
   const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const telemetryByDeviceId = useMemo(
@@ -551,6 +551,14 @@ function RuntimeSceneContent({
                 smoothness={4}
                 position={[center.x, 0, center.z]}
                 onClick={(event) => handleRoomClick(event, space.id)}
+                onPointerOver={(event) => {
+                  event.stopPropagation();
+                  setHoveredZoneId(space.id);
+                }}
+                onPointerOut={(event) => {
+                  event.stopPropagation();
+                  setHoveredZoneId((current) => (current === space.id ? null : current));
+                }}
               >
                 <meshStandardMaterial color={getSpaceColor(zone)} metalness={0.06} roughness={0.88} />
               </RoundedBox>
@@ -652,13 +660,15 @@ function RuntimeSceneContent({
                 intensity={Math.max(0.12, intensity * 0.85)}
               />
 
-              <FloatingRoomBadge
-                position={[center.x, 1.55, center.z]}
-                zone={zone}
-                label={space.name}
-                isSelected={isSelected}
-                isWorstZone={isWorstZone}
-              />
+              {hoveredZoneId === space.id ? (
+                <FloatingRoomBadge
+                  position={[center.x, 1.55, center.z]}
+                  zone={zone}
+                  label={space.name}
+                  isSelected={isSelected}
+                  isWorstZone={isWorstZone}
+                />
+              ) : null}
             </group>
           );
         })}
@@ -766,78 +776,9 @@ function PowerIcon() {
 
 export function RuntimeScene(props: RuntimeSceneProps) {
   const controlsRef = useRef<import("three-stdlib").OrbitControls | null>(null);
-  const idleTimerRef = useRef<number | null>(null);
-  const [isAutoRotateEnabled, setIsAutoRotateEnabled] = useState(true);
-  const [autoRotateActive, setAutoRotateActive] = useState(false);
-
-  const scheduleIdleRotation = () => {
-    if (idleTimerRef.current) {
-      window.clearTimeout(idleTimerRef.current);
-      idleTimerRef.current = null;
-    }
-
-    if (!isAutoRotateEnabled) {
-      setAutoRotateActive(false);
-      return;
-    }
-
-    idleTimerRef.current = window.setTimeout(() => {
-      setAutoRotateActive(true);
-    }, AUTO_ROTATE_IDLE_DELAY_MS);
-  };
-
-  const registerInteraction = () => {
-    setAutoRotateActive(false);
-    scheduleIdleRotation();
-  };
-
-  useEffect(() => {
-    scheduleIdleRotation();
-
-    return () => {
-      if (idleTimerRef.current) {
-        window.clearTimeout(idleTimerRef.current);
-        idleTimerRef.current = null;
-      }
-    };
-  }, [isAutoRotateEnabled]);
-
-  useEffect(() => {
-    const handleInteraction = () => {
-      setAutoRotateActive(false);
-
-      if (idleTimerRef.current) {
-        window.clearTimeout(idleTimerRef.current);
-        idleTimerRef.current = null;
-      }
-
-      if (isAutoRotateEnabled) {
-        idleTimerRef.current = window.setTimeout(() => {
-          setAutoRotateActive(true);
-        }, AUTO_ROTATE_IDLE_DELAY_MS);
-      }
-    };
-
-    window.addEventListener("pointerdown", handleInteraction);
-    window.addEventListener("wheel", handleInteraction, { passive: true });
-    window.addEventListener("touchstart", handleInteraction, { passive: true });
-    window.addEventListener("keydown", handleInteraction);
-
-    return () => {
-      window.removeEventListener("pointerdown", handleInteraction);
-      window.removeEventListener("wheel", handleInteraction);
-      window.removeEventListener("touchstart", handleInteraction);
-      window.removeEventListener("keydown", handleInteraction);
-    };
-  }, [isAutoRotateEnabled]);
 
   return (
-    <div
-      className="relative h-[100svh] min-h-[720px] w-full overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.92),rgba(224,232,240,0.75)_42%,rgba(199,211,224,0.96)_100%)]"
-      onPointerDown={registerInteraction}
-      onWheel={registerInteraction}
-      onTouchStart={registerInteraction}
-    >
+    <div className="relative h-[100svh] min-h-[720px] w-full overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.92),rgba(224,232,240,0.75)_42%,rgba(199,211,224,0.96)_100%)]">
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-32 bg-gradient-to-b from-white/55 to-transparent" />
       <div className="pointer-events-none absolute inset-x-4 top-4 z-10 sm:inset-x-6 sm:top-5">
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-full border border-white/55 bg-white/62 px-4 py-3 text-slate-600 backdrop-blur">
@@ -867,51 +808,13 @@ export function RuntimeScene(props: RuntimeSceneProps) {
           </div>
         </div>
       </div>
-      <div className="absolute bottom-4 right-4 z-10">
-        <button
-          type="button"
-          onClick={() => {
-            const nextValue = !isAutoRotateEnabled;
-            setIsAutoRotateEnabled(nextValue);
-            setAutoRotateActive(false);
-
-            if (idleTimerRef.current) {
-              window.clearTimeout(idleTimerRef.current);
-              idleTimerRef.current = null;
-            }
-
-            if (nextValue) {
-              idleTimerRef.current = window.setTimeout(() => {
-                setAutoRotateActive(true);
-              }, AUTO_ROTATE_IDLE_DELAY_MS);
-            }
-          }}
-          aria-pressed={isAutoRotateEnabled}
-          aria-label={isAutoRotateEnabled ? "Disable auto rotate" : "Enable auto rotate"}
-          className={`flex h-8 w-[58px] items-center rounded-full border px-1 transition ${
-            isAutoRotateEnabled
-              ? "border-emerald-400/55 bg-emerald-500/92 shadow-[0_10px_24px_rgba(16,185,129,0.24)]"
-              : "border-slate-200/90 bg-white/86 shadow-[0_10px_22px_rgba(15,23,42,0.08)]"
-          }`}
-        >
-          <span
-            className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] transition-transform ${
-              isAutoRotateEnabled
-                ? "translate-x-[26px] bg-white text-emerald-600"
-                : "translate-x-0 bg-slate-900 text-white"
-            }`}
-          >
-            ↻
-          </span>
-        </button>
-      </div>
       <Canvas
         orthographic
         camera={{ position: [18, 18, 18], zoom: 34, near: 0.1, far: 200 }}
         dpr={1}
         gl={{ antialias: false, powerPreference: "high-performance" }}
       >
-        <RuntimeSceneContent {...props} autoRotateActive={autoRotateActive} controlsRef={controlsRef} />
+        <RuntimeSceneContent {...props} autoRotateActive controlsRef={controlsRef} />
       </Canvas>
     </div>
   );
