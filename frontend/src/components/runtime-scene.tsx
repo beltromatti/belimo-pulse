@@ -14,6 +14,7 @@ import { Html } from "@react-three/drei/web/Html";
 import {
   BuildingBlueprint,
   DeviceDefinition,
+  DeviceDiagnosis,
   ProductDefinition,
   SandboxTickResult,
   TwinSnapshot,
@@ -174,7 +175,7 @@ function DuctSegment({
   if (dx >= dy && dx >= dz) {
     return (
       <RoundedBox args={[Math.max(dx, 0.2), thickness, thickness]} radius={0.04} smoothness={3} position={center}>
-        <meshStandardMaterial color={color} metalness={0.18} roughness={0.5} />
+        <meshStandardMaterial color={color} metalness={0.38} roughness={0.4} />
       </RoundedBox>
     );
   }
@@ -182,7 +183,7 @@ function DuctSegment({
   if (dz >= dx && dz >= dy) {
     return (
       <RoundedBox args={[thickness, thickness, Math.max(dz, 0.2)]} radius={0.04} smoothness={3} position={center}>
-        <meshStandardMaterial color={color} metalness={0.18} roughness={0.5} />
+        <meshStandardMaterial color={color} metalness={0.38} roughness={0.4} />
       </RoundedBox>
     );
   }
@@ -222,6 +223,131 @@ function WindowStrip({
   );
 }
 
+function getTemperatureColor(temperatureC: number) {
+  const cold = new THREE.Color("#3b82f6");
+  const neutral = new THREE.Color("#22c55e");
+  const warm = new THREE.Color("#f59e0b");
+  const hot = new THREE.Color("#ef4444");
+
+  if (temperatureC <= 20) {
+    return cold;
+  }
+
+  if (temperatureC <= 22) {
+    return cold.clone().lerp(neutral, (temperatureC - 20) / 2);
+  }
+
+  if (temperatureC <= 24) {
+    return neutral.clone().lerp(warm, (temperatureC - 22) / 2);
+  }
+
+  return warm.clone().lerp(hot, Math.min((temperatureC - 24) / 3, 1));
+}
+
+function ThermalOverlay({
+  center,
+  width,
+  depth,
+  zone,
+}: {
+  center: THREE.Vector3;
+  width: number;
+  depth: number;
+  zone: ZoneTwinState | undefined;
+}) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const color = zone ? getTemperatureColor(zone.temperatureC) : new THREE.Color("#94a3b8");
+
+  useFrame(({ clock }) => {
+    if (meshRef.current) {
+      const material = meshRef.current.material as THREE.MeshStandardMaterial;
+      material.opacity = 0.28 + Math.sin(clock.getElapsedTime() * 1.2) * 0.06;
+    }
+  });
+
+  return (
+    <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]} position={[center.x, 0.1, center.z]}>
+      <planeGeometry args={[width - 0.3, depth - 0.3]} />
+      <meshStandardMaterial
+        color={color}
+        emissive={color}
+        emissiveIntensity={0.2}
+        transparent
+        opacity={0.3}
+        depthWrite={false}
+      />
+    </mesh>
+  );
+}
+
+function DeviceHealthIndicator({
+  position,
+  diagnosis,
+  children,
+}: {
+  position: [number, number, number];
+  diagnosis: DeviceDiagnosis | undefined;
+  children: React.ReactNode;
+}) {
+  const glowRef = useRef<THREE.Mesh>(null);
+  const showGlow = diagnosis && diagnosis.healthScore < 85;
+  const isCritical = diagnosis && diagnosis.healthScore < 60;
+
+  useFrame(({ clock }) => {
+    if (glowRef.current && showGlow) {
+      const speed = isCritical ? 3.5 : 1.8;
+      const material = glowRef.current.material as THREE.MeshStandardMaterial;
+      material.emissiveIntensity = 0.6 + Math.sin(clock.getElapsedTime() * speed) * 0.4;
+      material.opacity = 0.12 + Math.sin(clock.getElapsedTime() * speed) * 0.06;
+    }
+  });
+
+  return (
+    <group>
+      {children}
+      {showGlow ? (
+        <mesh ref={glowRef} position={position}>
+          <sphereGeometry args={[0.45, 16, 16]} />
+          <meshStandardMaterial
+            color="#dc2626"
+            emissive="#dc2626"
+            emissiveIntensity={0.8}
+            transparent
+            opacity={0.15}
+            depthWrite={false}
+          />
+        </mesh>
+      ) : null}
+      {isCritical ? (
+        <Html position={[position[0], position[1] + 0.55, position[2]]} transform distanceFactor={10}>
+          <div className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[11px] font-bold text-white shadow-lg">
+            !
+          </div>
+        </Html>
+      ) : null}
+    </group>
+  );
+}
+
+function ComfortGlow({
+  center,
+  zone,
+  roomWidth,
+}: {
+  center: THREE.Vector3;
+  zone: ZoneTwinState | undefined;
+  roomWidth: number;
+}) {
+  if (!zone) {
+    return null;
+  }
+
+  const color = zone.comfortScore >= 92 ? "#16a34a" : zone.comfortScore >= 78 ? "#f59e0b" : "#dc2626";
+  const intensity = zone.comfortScore >= 92 ? 0.25 : zone.comfortScore >= 78 ? 0.45 : 0.7;
+
+  return <pointLight position={[center.x, 0.6, center.z]} color={color} intensity={intensity} distance={roomWidth * 1.2} decay={2} />;
+}
+
 function RuntimeSceneContent({
   blueprint,
   products,
@@ -236,6 +362,10 @@ function RuntimeSceneContent({
   const telemetryByDeviceId = useMemo(
     () => new Map((sandbox?.deviceReadings ?? []).map((reading) => [reading.deviceId, reading])),
     [sandbox?.deviceReadings],
+  );
+  const diagnosisByDeviceId = useMemo(
+    () => new Map((twin?.devices ?? []).map((d) => [d.deviceId, d])),
+    [twin?.devices],
   );
   const sourceDevice = blueprint.devices.find((device) => device.kind === "source_equipment");
   const sourcePoint = sourceDevice ? getDeviceScenePosition(sourceDevice) : new THREE.Vector3(10, 4.8, 5);
@@ -261,9 +391,10 @@ function RuntimeSceneContent({
     <>
       <color attach="background" args={["#d9e4ee"]} />
       <fog attach="fog" args={["#d9e4ee", 18, 48]} />
-      <ambientLight intensity={1.45} />
-      <hemisphereLight intensity={1.25} color="#f8fafc" groundColor="#c8d4e0" />
-      <directionalLight position={[8, 18, 10]} intensity={2.1} />
+      <ambientLight intensity={1.35} />
+      <hemisphereLight intensity={1.2} color="#f8fafc" groundColor="#c8d4e0" />
+      <directionalLight position={[8, 18, 10]} intensity={2.0} />
+      <directionalLight position={[-6, 12, -8]} intensity={0.4} color="#fef3c7" />
       <OrbitControls enablePan={false} minPolarAngle={0.8} maxPolarAngle={1.08} minAzimuthAngle={-0.92} maxAzimuthAngle={-0.42} minZoom={28} maxZoom={48} />
 
       <group rotation={[-0.34, -0.72, -0.04]} position={[-11.5, 0, -6.2]}>
@@ -322,6 +453,9 @@ function RuntimeSceneContent({
               >
                 <meshStandardMaterial color={getSpaceColor(zone)} metalness={0.06} roughness={0.88} />
               </RoundedBox>
+
+              <ThermalOverlay center={center} width={space.layout.size_m.width} depth={space.layout.size_m.depth} zone={zone} />
+              <ComfortGlow center={center} zone={zone} roomWidth={space.layout.size_m.width} />
 
               <RoundedBox
                 args={[space.layout.size_m.width + 0.14, 0.12, 0.16]}
@@ -410,20 +544,30 @@ function RuntimeSceneContent({
           const point = getDeviceScenePosition(device);
           const transform = getDeviceModelTransform(device);
           const reading = telemetryByDeviceId.get(device.id) ?? null;
+          const diagnosis = diagnosisByDeviceId.get(device.id);
 
           return (
-            <group
+            <DeviceHealthIndicator
               key={device.id}
               position={[
                 point.x + transform.positionOffset[0],
                 point.y + transform.positionOffset[1],
                 point.z + transform.positionOffset[2],
               ]}
-              rotation={transform.rotation}
-              scale={transform.sceneScale}
+              diagnosis={diagnosis}
             >
-              <RuntimeDeviceModel productId={product.id} device={device} telemetry={reading?.telemetry ?? null} />
-            </group>
+              <group
+                position={[
+                  point.x + transform.positionOffset[0],
+                  point.y + transform.positionOffset[1],
+                  point.z + transform.positionOffset[2],
+                ]}
+                rotation={transform.rotation}
+                scale={transform.sceneScale}
+              >
+                <RuntimeDeviceModel productId={product.id} device={device} telemetry={reading?.telemetry ?? null} />
+              </group>
+            </DeviceHealthIndicator>
           );
         })}
 

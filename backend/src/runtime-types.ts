@@ -153,4 +153,21 @@ export type WebSocketErrorMessage = {
   };
 };
 
-export type RuntimeSocketMessage = WebSocketTickMessage | WebSocketHelloMessage | WebSocketAckMessage | WebSocketErrorMessage;
+export type WebSocketBrainAlertMessage = {
+  type: "brain_alert";
+  payload: {
+    id: string;
+    severity: "info" | "warning" | "critical";
+    title: string;
+    body: string;
+    suggestedAction?: string;
+    timestamp: string;
+  };
+};
+
+export type RuntimeSocketMessage =
+  | WebSocketTickMessage
+  | WebSocketHelloMessage
+  | WebSocketAckMessage
+  | WebSocketErrorMessage
+  | WebSocketBrainAlertMessage;

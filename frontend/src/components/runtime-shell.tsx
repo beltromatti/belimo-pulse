@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import {
+  BrainAlert,
   DeviceDiagnosis,
   DeviceTelemetryRecord,
   FacilityModePreference,
@@ -22,6 +23,7 @@ import {
   RuntimeSocketMessage,
   ZoneTwinState,
 } from "@/lib/runtime-types";
+import { ChatPanel } from "@/components/chat-panel";
 import { InventoryPanel } from "@/components/inventory-panel";
 
 const RuntimeScene = dynamic(
@@ -118,6 +120,7 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
     initial.latestTwinSnapshot?.summary.worstZoneId ?? initial.blueprint.spaces[0]?.id ?? null,
   );
   const [controlError, setControlError] = useState<string | null>(null);
+  const [brainAlerts, setBrainAlerts] = useState<BrainAlert[]>([]);
   const [isPending, startUiTransition] = useTransition();
   const deferredRuntime = useDeferredValue(runtime);
   const heartbeatRef = useRef<number | null>(null);
@@ -227,6 +230,11 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
         }));
       });
       setControlError(null);
+      return;
+    }
+
+    if (message.type === "brain_alert") {
+      setBrainAlerts((prev) => [...prev.slice(-19), message.payload]);
       return;
     }
 
@@ -386,6 +394,7 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
   };
 
   return (
+  <>
     <main className="relative min-h-screen overflow-hidden px-4 py-4 text-slate-950 sm:px-6 lg:px-8">
       <div className="mx-auto flex max-w-[1680px] flex-col gap-4">
         <section className="grid gap-4 xl:grid-cols-[0.24fr_1fr_0.3fr]">
@@ -794,6 +803,14 @@ export function RuntimeShell({ initial, websocketUrl }: RuntimeShellProps) {
         </section>
       </div>
     </main>
+    <ChatPanel
+      alerts={brainAlerts}
+      onDismissAlert={(alertId) => {
+        setBrainAlerts((prev) => prev.filter((a) => a.id !== alertId));
+        fetch(`/api/brain/alerts/${alertId}/dismiss`, { method: "POST" }).catch(() => {});
+      }}
+    />
+  </>
   );
 }
 

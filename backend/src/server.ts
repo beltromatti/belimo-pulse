@@ -5,6 +5,7 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { z } from "zod";
 
+import { BuildingBrainAgent } from "./ai/agent";
 import { BelimoEngine } from "./belimo-engine";
 import { loadSandboxBlueprint } from "./blueprint";
 import { loadProductsCatalog } from "./catalog";
@@ -68,6 +69,8 @@ async function bootstrap() {
     belimoEngine,
     sandboxEngine.getTickSeconds() * 1000,
   );
+
+  const brainAgent = new BuildingBrainAgent(platform, env.OPENAI_API_KEY);
 
   await platform.hydrateFromDatabase();
   await platform.start();
@@ -246,6 +249,36 @@ async function bootstrap() {
     });
   });
 
+  const chatSchema = z.object({
+    message: z.string().min(1).max(4000),
+    conversationId: z.string().optional(),
+  });
+
+  app.post("/api/chat", async (request, response) => {
+    const payload = chatSchema.parse(request.body ?? {});
+    const result = await brainAgent.chat(payload.message, payload.conversationId);
+
+    response.json({
+      ok: true,
+      ...result,
+    });
+  });
+
+  app.get("/api/brain/alerts", (_request, response) => {
+    response.json({
+      ok: true,
+      alerts: brainAgent.getActiveAlerts(),
+    });
+  });
+
+  app.post("/api/brain/alerts/:id/dismiss", (request, response) => {
+    brainAgent.dismissAlert(request.params.id);
+
+    response.json({
+      ok: true,
+    });
+  });
+
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     if (error instanceof z.ZodError) {
       response.status(400).json({
@@ -315,6 +348,30 @@ async function bootstrap() {
     for (const client of wss.clients) {
       if (client.readyState === client.OPEN) {
         client.send(message);
+      }
+    }
+
+    if (payload.twin) {
+      const alert = brainAgent.evaluateTick(payload.twin, payload.controls);
+
+      if (alert) {
+        const alertMessage = JSON.stringify({
+          type: "brain_alert",
+          payload: {
+            id: alert.id,
+            severity: alert.severity,
+            title: alert.title,
+            body: alert.body,
+            suggestedAction: alert.suggestedAction,
+            timestamp: alert.timestamp,
+          },
+        } satisfies RuntimeSocketMessage);
+
+        for (const client of wss.clients) {
+          if (client.readyState === client.OPEN) {
+            client.send(alertMessage);
+          }
+        }
       }
     }
   });
