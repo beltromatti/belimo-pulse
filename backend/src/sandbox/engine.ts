@@ -19,7 +19,14 @@ import {
   smoothStep,
   solarGainMultiplier,
 } from "../physics";
-import { DeviceTelemetryRecord, SandboxTickResult, ZoneTwinState } from "../runtime-types";
+import {
+  DeviceTelemetryRecord,
+  RuntimeControlInput,
+  RuntimeControlState,
+  RuntimeFaultDescriptor,
+  SandboxTickResult,
+  ZoneTwinState,
+} from "../runtime-types";
 import { SandboxTruth } from "../sandbox-truth";
 import { OpenMeteoWeatherService } from "./weather";
 
@@ -68,6 +75,8 @@ export class SandboxDataGenerationEngine {
 
   private readonly runtimeFaults: RuntimeFault[];
 
+  private readonly controlState: RuntimeControlState;
+
   constructor(
     private readonly blueprint: BuildingBlueprint,
     private readonly sandboxTruth: SandboxTruth,
@@ -85,11 +94,58 @@ export class SandboxDataGenerationEngine {
       severity: fault.severity,
       active: false,
     }));
+    this.controlState = {
+      sourceModePreference: "auto",
+      zoneTemperatureOffsetsC: Object.fromEntries(blueprint.spaces.map((space) => [space.id, 0])),
+      occupancyBias: 1,
+      faultOverrides: Object.fromEntries(sandboxTruth.fault_profiles.map((fault) => [fault.id, "auto"])),
+    };
     this.runtimeState = this.createInitialRuntimeState();
   }
 
   getTickSeconds() {
     return this.sandboxTruth.runtime.simulation_timestep_s;
+  }
+
+  getControlState() {
+    return structuredClone(this.controlState);
+  }
+
+  getAvailableFaults(): RuntimeFaultDescriptor[] {
+    return this.sandboxTruth.fault_profiles.map(({ id, device_id, fault_type, severity }) => ({
+      id,
+      deviceId: device_id,
+      faultType: fault_type,
+      severity,
+    }));
+  }
+
+  updateControls(input: RuntimeControlInput) {
+    if (input.sourceModePreference) {
+      this.controlState.sourceModePreference = input.sourceModePreference;
+    }
+
+    if (typeof input.occupancyBias === "number") {
+      this.controlState.occupancyBias = clamp(input.occupancyBias, 0.4, 1.6);
+    }
+
+    if (input.zoneTemperatureOffsetsC) {
+      for (const [zoneId, offset] of Object.entries(input.zoneTemperatureOffsetsC)) {
+        if (zoneId in this.controlState.zoneTemperatureOffsetsC) {
+          this.controlState.zoneTemperatureOffsetsC[zoneId] = clamp(offset, -3, 3);
+        }
+      }
+    }
+
+    if (input.faultOverrides) {
+      for (const [faultId, mode] of Object.entries(input.faultOverrides)) {
+        if (faultId in this.controlState.faultOverrides) {
+          this.controlState.faultOverrides[faultId] = mode;
+        }
+      }
+    }
+
+    return this.getControlState();
   }
 
   async tick(now = new Date()): Promise<SandboxTickResult> {
@@ -252,7 +308,13 @@ export class SandboxDataGenerationEngine {
         : truth.occupancy_profile.weekday_peak_fraction;
       const variation = truth.occupancy_profile.stochastic_variation_pct;
       const randomness = 1 - variation + this.random() * variation * 2;
-      occupancyByZone[space.id] = Math.round(space.occupancy_design.design_people * baseFraction * peakFraction * randomness);
+      occupancyByZone[space.id] = Math.round(
+        space.occupancy_design.design_people *
+          baseFraction *
+          peakFraction *
+          randomness *
+          this.controlState.occupancyBias,
+      );
     }
 
     return occupancyByZone;
@@ -270,7 +332,7 @@ export class SandboxDataGenerationEngine {
 
       const occupied = occupancyByZone[space.id] > 0;
       const targetBand = occupied ? space.comfort_targets.occupied_temperature_band_c : space.comfort_targets.unoccupied_temperature_band_c;
-      const targetMidpoint = (targetBand[0] + targetBand[1]) / 2;
+      const targetMidpoint = (targetBand[0] + targetBand[1]) / 2 + this.getZoneTemperatureOffset(space.id);
       const tempError = truth.temperatureC - targetMidpoint;
       const co2Demand = Math.max(0, (truth.co2Ppm - space.comfort_targets.co2_limit_ppm) / 200);
       demandByZone[space.id] = clamp(0.5 + tempError * 0.18 + co2Demand, 0.15, 1.15);
@@ -291,15 +353,21 @@ export class SandboxDataGenerationEngine {
     let sourceMode: RuntimeState["sourceMode"] = "ventilation";
     let supplyTemperatureSetpointC = satRange[1];
 
-    if (averageZoneTemp > 23.4) {
+    if (this.controlState.sourceModePreference === "cooling" || averageZoneTemp > 23.4) {
       sourceMode = "cooling";
       supplyTemperatureSetpointC = lerp(satRange[1], satRange[0], clamp((averageZoneTemp - 23.4) / 3, 0, 1));
-    } else if (averageZoneTemp < 21.2 || outdoorTemperatureC < 8) {
+    } else if (this.controlState.sourceModePreference === "heating" || averageZoneTemp < 21.2 || outdoorTemperatureC < 8) {
       sourceMode = "heating";
       supplyTemperatureSetpointC = lerp(19, 31, clamp((21.2 - averageZoneTemp) / 4, 0, 1));
-    } else if (outdoorTemperatureC < this.blueprint.control_profiles.air_loop_design.economizer_lockout_temperature_c && occupiedZones > 0) {
+    } else if (
+      this.controlState.sourceModePreference === "economizer" ||
+      (outdoorTemperatureC < this.blueprint.control_profiles.air_loop_design.economizer_lockout_temperature_c && occupiedZones > 0)
+    ) {
       sourceMode = "economizer";
       supplyTemperatureSetpointC = 16.5;
+    } else if (this.controlState.sourceModePreference === "ventilation") {
+      sourceMode = "ventilation";
+      supplyTemperatureSetpointC = satRange[1];
     }
 
     const minOutdoor = this.getSourceDevice().design.minimum_outdoor_air_fraction ?? 0.18;
@@ -680,7 +748,13 @@ export class SandboxDataGenerationEngine {
         continue;
       }
 
-      runtimeFault.active = this.runtimeState.runtimeSeconds >= profile.activation_runtime_s;
+      const override = this.controlState.faultOverrides[runtimeFault.id] ?? "auto";
+      runtimeFault.active =
+        override === "forced_on"
+          ? true
+          : override === "forced_off"
+            ? false
+            : this.runtimeState.runtimeSeconds >= profile.activation_runtime_s;
     }
   }
 
@@ -719,6 +793,10 @@ export class SandboxDataGenerationEngine {
       this.sandboxTruth.equipment_truth.branch_flow_coefficients.find((candidate) => candidate.device_id === deviceId)?.flow_weight ??
       1
     );
+  }
+
+  private getZoneTemperatureOffset(zoneId: string) {
+    return this.controlState.zoneTemperatureOffsetsC[zoneId] ?? 0;
   }
 
   private async getWeather(now: Date) {

@@ -6,6 +6,8 @@ COPY package*.json ./
 RUN npm ci
 
 COPY tsconfig.json ./
+COPY products.json ./
+COPY blueprints ./blueprints
 COPY src ./src
 
 RUN npm run build
@@ -20,6 +22,8 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/products.json ./products.json
+COPY --from=builder /app/blueprints ./blueprints
 
 EXPOSE 8080
 

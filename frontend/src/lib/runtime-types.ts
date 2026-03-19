@@ -1,11 +1,89 @@
-import { BuildingBlueprint } from "./blueprint";
-import { ProductDefinition } from "./catalog";
-import { WeatherSnapshot } from "./physics";
+export type WeatherSnapshot = {
+  source: "open-meteo";
+  observedAt: string;
+  temperatureC: number;
+  relativeHumidityPct: number;
+  windSpeedMps: number;
+  windDirectionDeg: number;
+  cloudCoverPct: number;
+  isStale: boolean;
+};
+
+export type ProductDefinition = {
+  id: string;
+  brand: string;
+  category: string;
+  subtype: string;
+};
+
+export type BlueprintSurface = {
+  surface_id: string;
+  construction_id: string;
+  area_m2: number;
+  boundary: "outdoor" | "ground" | "adjacent";
+  orientation_deg: number;
+};
+
+export type SpaceDefinition = {
+  id: string;
+  name: string;
+  type: string;
+  layout: {
+    origin_m: { x: number; y: number; z: number };
+    size_m: { width: number; depth: number };
+  };
+  geometry: {
+    area_m2: number;
+    height_m: number;
+    volume_m3: number;
+  };
+  envelope: {
+    opaque_surfaces: BlueprintSurface[];
+    transparent_surfaces: BlueprintSurface[];
+    infiltration_class: string;
+  };
+  comfort_targets: {
+    occupied_temperature_band_c: [number, number];
+    unoccupied_temperature_band_c: [number, number];
+    humidity_band_pct: [number, number];
+    co2_limit_ppm: number;
+  };
+};
+
+export type DeviceDefinition = {
+  id: string;
+  product_id: string;
+  kind: "source_equipment" | "actuator" | "sensor";
+  placement: string;
+  served_space_ids: string[];
+  layout: {
+    position_m: { x: number; y: number; z: number };
+  };
+  design: Record<string, number>;
+};
+
+export type BuildingBlueprint = {
+  blueprint_id: string;
+  blueprint_version: string;
+  source_type: "sandbox" | "real";
+  building: {
+    name: string;
+    timezone: string;
+    location: {
+      city: string;
+      country: string;
+      latitude: number;
+      longitude: number;
+    };
+  };
+  spaces: SpaceDefinition[];
+  devices: DeviceDefinition[];
+};
 
 export type DeviceTelemetryRecord = {
   deviceId: string;
   productId: string;
-  category: ProductDefinition["category"];
+  category: string;
   observedAt: string;
   telemetry: Record<string, number | string | boolean | null>;
 };
@@ -76,7 +154,6 @@ export type SandboxTickResult = {
 };
 
 export type FacilityModePreference = "auto" | "ventilation" | "cooling" | "heating" | "economizer";
-
 export type FaultOverrideMode = "auto" | "forced_on" | "forced_off";
 
 export type RuntimeControlState = {
@@ -85,13 +162,6 @@ export type RuntimeControlState = {
   occupancyBias: number;
   faultOverrides: Record<string, FaultOverrideMode>;
 };
-
-export type RuntimeControlInput = Partial<{
-  sourceModePreference: FacilityModePreference;
-  zoneTemperatureOffsetsC: Record<string, number>;
-  occupancyBias: number;
-  faultOverrides: Record<string, FaultOverrideMode>;
-}>;
 
 export type RuntimeFaultDescriptor = {
   id: string;
@@ -111,34 +181,30 @@ export type RuntimeBootstrapPayload = {
   availableFaults: RuntimeFaultDescriptor[];
 };
 
-export type WebSocketTickMessage = {
-  type: "tick";
-  payload: {
-    generatedAt: string;
-    twin: TwinSnapshot | null;
-    sandbox: SandboxTickResult | null;
-    controls: RuntimeControlState;
-  };
-};
-
-export type WebSocketHelloMessage = {
-  type: "hello";
-  payload: RuntimeBootstrapPayload;
-};
-
-export type WebSocketAckMessage = {
-  type: "ack";
-  payload: {
-    generatedAt: string;
-    controls: RuntimeControlState;
-  };
-};
-
-export type WebSocketErrorMessage = {
-  type: "error";
-  payload: {
-    message: string;
-  };
-};
-
-export type RuntimeSocketMessage = WebSocketTickMessage | WebSocketHelloMessage | WebSocketAckMessage | WebSocketErrorMessage;
+export type RuntimeSocketMessage =
+  | {
+      type: "hello";
+      payload: RuntimeBootstrapPayload;
+    }
+  | {
+      type: "tick";
+      payload: {
+        generatedAt: string;
+        twin: TwinSnapshot | null;
+        sandbox: SandboxTickResult | null;
+        controls: RuntimeControlState;
+      };
+    }
+  | {
+      type: "ack";
+      payload: {
+        generatedAt: string;
+        controls: RuntimeControlState;
+      };
+    }
+  | {
+      type: "error";
+      payload: {
+        message: string;
+      };
+    };

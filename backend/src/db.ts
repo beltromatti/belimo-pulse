@@ -2,7 +2,7 @@ import { Pool } from "pg";
 
 import { BuildingBlueprint } from "./blueprint";
 import { env } from "./config";
-import { DeviceTelemetryRecord, TwinSnapshot } from "./runtime-types";
+import { DeviceTelemetryRecord, RuntimeControlState, TwinSnapshot } from "./runtime-types";
 import { WeatherSnapshot } from "./physics";
 
 const pool = new Pool({
@@ -65,6 +65,24 @@ export async function ensureDatabaseReady() {
 
     CREATE INDEX IF NOT EXISTS pulse_twin_snapshots_lookup_idx
       ON pulse_twin_snapshots (building_id, observed_at DESC);
+
+    CREATE TABLE IF NOT EXISTS pulse_facility_preferences (
+      building_id TEXT PRIMARY KEY,
+      preferences JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS pulse_control_events (
+      id BIGSERIAL PRIMARY KEY,
+      building_id TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS pulse_control_events_lookup_idx
+      ON pulse_control_events (building_id, created_at DESC);
   `);
 }
 
@@ -201,6 +219,33 @@ export async function insertTwinSnapshot(snapshot: TwinSnapshot) {
       JSON.stringify(snapshot.devices),
       JSON.stringify(snapshot.derived),
     ],
+  );
+}
+
+export async function upsertFacilityPreferences(buildingId: string, preferences: RuntimeControlState) {
+  await pool.query(
+    `
+      INSERT INTO pulse_facility_preferences (building_id, preferences)
+      VALUES ($1, $2::jsonb)
+      ON CONFLICT (building_id) DO UPDATE
+      SET preferences = EXCLUDED.preferences, updated_at = NOW()
+    `,
+    [buildingId, JSON.stringify(preferences)],
+  );
+}
+
+export async function insertControlEvent(
+  buildingId: string,
+  actor: string,
+  eventType: string,
+  payload: Record<string, unknown>,
+) {
+  await pool.query(
+    `
+      INSERT INTO pulse_control_events (building_id, actor, event_type, payload)
+      VALUES ($1, $2, $3, $4::jsonb)
+    `,
+    [buildingId, actor, eventType, JSON.stringify(payload)],
   );
 }
 

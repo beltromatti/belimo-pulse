@@ -1,5 +1,8 @@
+import http from "http";
+
 import cors from "cors";
 import express from "express";
+import { WebSocketServer } from "ws";
 import { z } from "zod";
 
 import { BelimoEngine } from "./belimo-engine";
@@ -14,6 +17,7 @@ import {
   listRecentDeviceObservations,
 } from "./db";
 import { BelimoPlatform } from "./platform";
+import { RuntimeSocketMessage } from "./runtime-types";
 import { SandboxDataGenerationEngine } from "./sandbox/engine";
 import { loadDefaultSandboxTruth } from "./sandbox-truth";
 import { OpenMeteoWeatherService } from "./sandbox/weather";
@@ -25,6 +29,16 @@ const pingSchema = z.object({
 
 const historyQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(50),
+});
+
+const controlSchema = z.object({
+  actor: z.string().min(1).default("frontend-ui"),
+  sourceModePreference: z.enum(["auto", "ventilation", "cooling", "heating", "economizer"]).optional(),
+  occupancyBias: z.number().min(0.4).max(1.6).optional(),
+  zoneTemperatureOffsetsC: z.record(z.string(), z.number().min(-3).max(3)).optional(),
+  faultOverrides: z
+    .record(z.string(), z.enum(["auto", "forced_on", "forced_off"]))
+    .optional(),
 });
 
 async function bootstrap() {
@@ -131,11 +145,39 @@ async function bootstrap() {
     });
   });
 
+  app.get("/api/runtime/bootstrap", (_request, response) => {
+    response.json({
+      ok: true,
+      payload: platform.getBootstrapPayload(),
+      websocketPath: "/ws",
+    });
+  });
+
+  app.post("/api/runtime/control", async (request, response) => {
+    const payload = controlSchema.parse(request.body ?? {});
+    const controls = await platform.updateControls(
+      {
+        sourceModePreference: payload.sourceModePreference,
+        occupancyBias: payload.occupancyBias,
+        zoneTemperatureOffsetsC: payload.zoneTemperatureOffsetsC,
+        faultOverrides: payload.faultOverrides,
+      },
+      payload.actor,
+    );
+
+    response.status(200).json({
+      ok: true,
+      controls,
+    });
+  });
+
   app.get("/api/sandbox/status", (_request, response) => {
     response.json({
       ok: true,
       engine: "sandbox-data-generation-engine",
       latest: platform.getLatestSandboxBatch(),
+      controls: platform.getControls(),
+      availableFaults: platform.getAvailableFaults(),
       error: platform.getLastError(),
     });
   });
@@ -155,6 +197,7 @@ async function bootstrap() {
       ok: true,
       engine: "belimo-engine",
       twin: platform.getLatestTwinState(),
+      controls: platform.getControls(),
       error: platform.getLastError(),
     });
   });
@@ -176,11 +219,69 @@ async function bootstrap() {
     });
   });
 
-  const server = app.listen(env.PORT, env.HOST, () => {
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ server, path: "/ws" });
+
+  wss.on("connection", (socket, request) => {
+    const origin = request.headers.origin;
+
+    if (origin && !allowedOrigins.includes(origin)) {
+      socket.send(
+        JSON.stringify({
+          type: "error",
+          payload: {
+            message: `Origin ${origin} is not allowed`,
+          },
+        } satisfies RuntimeSocketMessage),
+      );
+      socket.close();
+      return;
+    }
+
+    socket.send(
+      JSON.stringify({
+        type: "hello",
+        payload: platform.getBootstrapPayload(),
+      } satisfies RuntimeSocketMessage),
+    );
+
+    socket.on("message", (rawMessage) => {
+      const message = rawMessage.toString();
+
+      if (message === "ping") {
+        socket.send(
+          JSON.stringify({
+            type: "ack",
+            payload: {
+              generatedAt: new Date().toISOString(),
+              controls: platform.getControls(),
+            },
+          } satisfies RuntimeSocketMessage),
+        );
+      }
+    });
+  });
+
+  const unsubscribe = platform.onTick((payload) => {
+    const message = JSON.stringify({
+      type: "tick",
+      payload,
+    } satisfies RuntimeSocketMessage);
+
+    for (const client of wss.clients) {
+      if (client.readyState === client.OPEN) {
+        client.send(message);
+      }
+    }
+  });
+
+  server.listen(env.PORT, env.HOST, () => {
     console.log(`Belimo Pulse backend listening on http://${env.HOST}:${env.PORT}`);
   });
 
   const shutdown = async () => {
+    unsubscribe();
+    wss.close();
     await platform.stop();
     server.close(async () => {
       await closeDatabase();
