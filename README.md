@@ -246,3 +246,52 @@ Start Hackathon 2026
  5. streamlit run dashboard.py — should show chat UI + sidebar
  6. In chat: type "Check actuator health" → should see tool call chain + diagnosis
  7. If on WiFi: "Move actuator to 25%" → actuator physically moves
+
+
+ All three files created and verified. Here's what's ready:
+
+  Built:
+  - mcp_server.py — 12 MCP tools (read, analyze, control, advisory). All tested and working.
+  - agent.py — Claude API agent with tool_use. CLI mode + importable chat() function.
+  - dashboard.py — Streamlit UI with chat, health sidebar, auto-charts, quick action buttons.
+
+  To run:
+  cd experiments
+  source venv/bin/activate
+  export ANTHROPIC_API_KEY=sk-ant-...
+
+  # CLI mode (quick test):
+  python agent.py "Check this actuator's health"
+
+  # Dashboard:
+  streamlit run dashboard.py
+
+  The 12 tools available to the agent:
+
+  ┌──────────────────────────────┬──────────┬──────────────────────────────┐
+  │             Tool             │   Type   │         What it does         │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ read_telemetry               │ Read     │ Live sensor data from Pi     │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ get_health_report            │ Read     │ Pre-computed diagnostics     │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ get_electronics_report       │ Read     │ Electronic health data       │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ list_experiments             │ Read     │ Available data files         │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ get_experiment_data          │ Read     │ Load specific CSV            │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ analyze_sweep                │ Analysis │ Run 5-point diagnostics      │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ analyze_hunting              │ Analysis │ Hunting risk analysis        │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ move_actuator                │ Control  │ Physical actuator movement   │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ run_quick_sweep              │ Control  │ Fast 2-min diagnostic sweep  │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ estimate_energy_waste        │ Advisory │ CHF/year from hunting        │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ estimate_maintenance_savings │ Advisory │ Predictive maintenance ROI   │
+  ├──────────────────────────────┼──────────┼──────────────────────────────┤
+  │ compare_profiles             │ Advisory │ Healthy vs faulty comparison │
+  └──────────────────────────────┴──────────┴─────────────────────────────
