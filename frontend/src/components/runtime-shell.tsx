@@ -123,6 +123,8 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
   const [controlError, setControlError] = useState<string | null>(null);
   const [brainAlerts, setBrainAlerts] = useState<BrainAlert[]>(initialBrainAlerts ?? []);
   const [isPending, startUiTransition] = useTransition();
+  const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState(true);
+  const [isRightDrawerOpen, setIsRightDrawerOpen] = useState(true);
   const deferredRuntime = useDeferredValue(runtime);
   const heartbeatRef = useRef<number | null>(null);
   const reconnectRef = useRef<number | null>(null);
@@ -394,12 +396,45 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
     });
   };
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsLeftDrawerOpen(false);
+        setIsRightDrawerOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
   return (
   <>
     <main className="relative min-h-screen overflow-hidden px-4 py-4 text-slate-950 sm:px-6 lg:px-8">
       <div className="mx-auto flex max-w-[1680px] flex-col gap-4">
-        <section className="grid gap-4 xl:grid-cols-[0.24fr_1fr_0.3fr]">
-          <aside className="glass-panel flex flex-col gap-4 p-4">
+        <section className="relative">
+          <DrawerToggle
+            side="left"
+            isOpen={isLeftDrawerOpen}
+            onClick={() => setIsLeftDrawerOpen((current) => !current)}
+            label="Controls"
+          />
+          <DrawerToggle
+            side="right"
+            isOpen={isRightDrawerOpen}
+            onClick={() => setIsRightDrawerOpen((current) => !current)}
+            label="Inspect"
+          />
+
+          <aside
+            className={`glass-panel fixed inset-y-4 left-4 z-30 flex w-[min(23rem,calc(100vw-1.5rem))] flex-col gap-4 overflow-y-auto p-4 transition-all duration-300 ${
+              isLeftDrawerOpen ? "translate-x-0 opacity-100" : "-translate-x-[calc(100%+1.5rem)] opacity-0 pointer-events-none"
+            }`}
+            aria-hidden={!isLeftDrawerOpen}
+          >
             <CardBlock>
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -621,7 +656,11 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
             </CardBlock>
           </aside>
 
-          <section className="glass-panel flex flex-col p-4">
+          <section
+            className={`glass-panel flex flex-col p-4 transition-[margin] duration-300 ${
+              isLeftDrawerOpen ? "xl:ml-[23rem]" : ""
+            } ${isRightDrawerOpen ? "xl:mr-[23rem]" : ""}`}
+          >
             <div className="grid gap-3 md:grid-cols-4">
               <MetricCard label="Unit" value={initial.blueprint.building.name} tone="dark" />
               <MetricCard label="Total Air Flow" value={`${totalAirflow.toFixed(0)} m³/h`} />
@@ -689,7 +728,12 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
             />
           </section>
 
-          <aside className="glass-panel flex flex-col gap-4 p-4">
+          <aside
+            className={`glass-panel fixed inset-y-4 right-4 z-30 flex w-[min(23rem,calc(100vw-1.5rem))] flex-col gap-4 overflow-y-auto p-4 transition-all duration-300 ${
+              isRightDrawerOpen ? "translate-x-0 opacity-100" : "translate-x-[calc(100%+1.5rem)] opacity-0 pointer-events-none"
+            }`}
+            aria-hidden={!isRightDrawerOpen}
+          >
             <CardBlock>
               <SectionEyebrow label="Selected Zone" />
               <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-slate-950">
@@ -821,6 +865,36 @@ function CardBlock({ children }: { children: React.ReactNode }) {
 
 function SectionEyebrow({ label }: { label: string }) {
   return <p className="text-xs font-medium uppercase tracking-[0.28em] text-slate-500">{label}</p>;
+}
+
+function DrawerToggle({
+  side,
+  isOpen,
+  onClick,
+  label,
+}: {
+  side: "left" | "right";
+  isOpen: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  const sideClass = side === "left" ? "left-4" : "right-4";
+  const arrow = side === "left" ? (isOpen ? "←" : "→") : isOpen ? "→" : "←";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={isOpen}
+      aria-label={`${isOpen ? "Close" : "Open"} ${label}`}
+      className={`glass-panel fixed ${sideClass} top-1/2 z-40 flex -translate-y-1/2 items-center gap-2 rounded-full px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-white/85`}
+    >
+      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/80 text-base text-slate-900">
+        {arrow}
+      </span>
+      <span className="hidden xl:inline">{label}</span>
+    </button>
+  );
 }
 
 function StatusDot({ state }: { state: "connecting" | "live" | "offline" }) {
