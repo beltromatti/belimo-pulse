@@ -1,0 +1,1025 @@
+{
+  "schema_version": "2026-03-19",
+  "catalog_version": "sandbox-v1",
+  "generated_for": "Belimo Pulse",
+  "design_basis": {
+    "intent": "Finite product catalog for the Belimo Pulse sandbox building and for the future real-building ingestion pipeline.",
+    "building_concept": "Single-floor commercial office with one ducted rooftop source unit, ceiling supply/return ducts, Belimo outdoor/return/zone dampers, room comfort sensors, duct temperature and humidity sensors, and duct static/filter pressure monitoring.",
+    "modeling_rules": [
+      "The local LM sample actuator is represented with the exact writable fields and telemetry fields observed in experiments/experiment_data.",
+      "Other Belimo actuators are represented at product-family level using current official catalog data and simplified writable surfaces that still match realistic HVAC use.",
+      "Belimo sensors are measurement-only in the concept: they emit values but expose no writable settings through the sandbox API.",
+      "Non-Belimo source equipment is simplified to the minimum writable controls needed to produce physically plausible hot/cold supply air and to exercise the same backend pipeline that a real building would use.",
+      "Sandbox v1 uses a packaged rooftop heat-pump unit as the primary air source; air-cooled chiller and condensing boiler objects are included as catalog items for the later central-plant expansion path."
+    ],
+    "source_evidence": {
+      "local_sample_data": [
+        "experiments/experiment_data/sweep_test100.csv",
+        "experiments/experiment_data/steps_test200.csv",
+        "experiments/experiment_data/thermal_test400.csv",
+        "experiments/experiment_data/electronics_test500.csv",
+        "experiments/experiment_data/report_v2.json",
+        "experiments/experiment_data/electronics_test500_report.json"
+      ],
+      "web_sources": [
+        "https://www.belimo.com/mam/europe/technical-documentation/technical-leaflets/belimo_applications/belimo_Solutions-for-air-handling-units_technical-brochure_en-gb.pdf",
+        "https://www.belimo.com/at/shop/en_GB/Actuators/Non-Fail-Safe-Actuators/LM24A-MOD/p?code=LM24A-MOD",
+        "https://www.belimo.com/us/shop/en_US/Sensors-Meters/Room-Sensors-%28Air%29/22RTM-5U00A/p?code=22RTM-5U00A",
+        "https://www.daikinapplied.com/products/rooftop-systems/rebel",
+        "https://www.trane.com/commercial/north-america/us/en/products-systems/chillers/air-cooled-chillers/sintesis.html",
+        "https://www.viessmann-us.com/en/products/vitocrossal/vitocrossal-200-cm2.html"
+      ]
+    }
+  },
+  "products": [
+    {
+      "id": "belimo_lm_series_sample_air_damper_actuator",
+      "brand": "Belimo",
+      "category": "actuator",
+      "subtype": "rotary_air_damper_actuator_non_fail_safe",
+      "abstraction_level": "high_fidelity_local_sample",
+      "official_reference_models": [
+        "LM24A-MOD"
+      ],
+      "concept_roles": [
+        "zone_supply_branch_damper",
+        "small_transfer_damper",
+        "diagnostic_reference_actuator"
+      ],
+      "catalog_basis": {
+        "official_specs": {
+          "voltage": "AC/DC 24 V",
+          "rated_torque_nm": 5,
+          "angle_of_rotation_deg": 95,
+          "control_options": [
+            "BACnet MS/TP",
+            "Modbus RTU",
+            "MP-Bus",
+            "DC 2...10 V",
+            "DC 0.5...10 V"
+          ],
+          "running_time_full_stroke_s": {
+            "nominal": 150,
+            "variable_range": [
+              35,
+              150
+            ]
+          },
+          "protection": "IP54"
+        },
+        "local_sample_observations": {
+          "observed_command_path": "Write setpoint_position_% and test_number into Influx measurement _process; Raspberry Pi logger applies the command over MP-Bus and logs telemetry back into measurements.",
+          "rated_torque_nmm_from_experiments": 5000,
+          "observed_fields": [
+            "setpoint_position_%",
+            "feedback_position_%",
+            "rotation_direction",
+            "motor_torque_Nmm",
+            "power_W",
+            "internal_temperature_deg_C",
+            "test_number"
+          ],
+          "empirical_baseline": {
+            "baseline_friction_nmm": 0.7,
+            "avg_transit_time_s": 7.06,
+            "avg_overshoot_pct": 0.0,
+            "smoothness_score": 0.867,
+            "hunting_risk_verdict": "MODERATE_RISK"
+          }
+        }
+      },
+      "telemetry_schema": [
+        {
+          "name": "setpoint_position_%",
+          "type": "number",
+          "unit": "%",
+          "range": [
+            0,
+            100
+          ],
+          "fidelity": "exact_local_sample"
+        },
+        {
+          "name": "feedback_position_%",
+          "type": "number",
+          "unit": "%",
+          "range": [
+            0,
+            100
+          ],
+          "fidelity": "exact_local_sample"
+        },
+        {
+          "name": "rotation_direction",
+          "type": "integer",
+          "enum": [
+            0,
+            1,
+            2
+          ],
+          "enum_meaning": {
+            "0": "still",
+            "1": "opening",
+            "2": "closing"
+          },
+          "fidelity": "exact_local_sample"
+        },
+        {
+          "name": "motor_torque_Nmm",
+          "type": "number",
+          "unit": "Nmm",
+          "fidelity": "exact_local_sample"
+        },
+        {
+          "name": "power_W",
+          "type": "number",
+          "unit": "W",
+          "fidelity": "exact_local_sample"
+        },
+        {
+          "name": "internal_temperature_deg_C",
+          "type": "number",
+          "unit": "degC",
+          "fidelity": "exact_local_sample"
+        },
+        {
+          "name": "test_number",
+          "type": "integer",
+          "fidelity": "exact_local_sample"
+        }
+      ],
+      "command_schema": [
+        {
+          "name": "setpoint_position_%",
+          "type": "number",
+          "unit": "%",
+          "range": [
+            0,
+            100
+          ],
+          "required": true
+        },
+        {
+          "name": "test_number",
+          "type": "integer",
+          "required": false,
+          "default": -1
+        }
+      ],
+      "sandbox_failure_modes": [
+        "mechanical_obstruction_inside_damper_or_actuator",
+        "linkage_slip",
+        "oversized_damper_with_hunting",
+        "asymmetric_friction",
+        "stuck_half_open",
+        "temperature_related_electronics_drift"
+      ],
+      "sandbox_notes": "Use this object anywhere the concept needs the most faithful actuator behavior and anomaly generation, especially for the 'mouse inside the actuator' diagnostic storyline."
+    },
+    {
+      "id": "belimo_nm24a_mod_air_damper_actuator",
+      "brand": "Belimo",
+      "category": "actuator",
+      "subtype": "rotary_air_damper_actuator_non_fail_safe",
+      "abstraction_level": "family_level_real_product",
+      "official_reference_models": [
+        "NM24A-MOD"
+      ],
+      "concept_roles": [
+        "outdoor_air_damper",
+        "return_air_damper",
+        "exhaust_air_damper",
+        "economizer_bypass_damper"
+      ],
+      "catalog_basis": {
+        "official_specs": {
+          "voltage": "AC/DC 24 V",
+          "rated_torque_nm": 10,
+          "angle_of_rotation_deg": 95,
+          "control_options": [
+            "BACnet MS/TP",
+            "Modbus RTU",
+            "MP-Bus",
+            "DC 2...10 V",
+            "DC 0.5...10 V"
+          ],
+          "running_time_full_stroke_s": {
+            "nominal": 150,
+            "variable_range": [
+              43,
+              173
+            ]
+          },
+          "protection": "IP54"
+        }
+      },
+      "telemetry_schema": [
+        {
+          "name": "commanded_position_pct",
+          "type": "number",
+          "unit": "%",
+          "range": [
+            0,
+            100
+          ]
+        },
+        {
+          "name": "feedback_position_pct",
+          "type": "number",
+          "unit": "%",
+          "range": [
+            0,
+            100
+          ]
+        },
+        {
+          "name": "rotation_direction",
+          "type": "string",
+          "enum": [
+            "idle",
+            "opening",
+            "closing"
+          ]
+        },
+        {
+          "name": "estimated_torque_nm",
+          "type": "number",
+          "unit": "Nm"
+        },
+        {
+          "name": "actuator_body_temperature_c",
+          "type": "number",
+          "unit": "degC"
+        }
+      ],
+      "command_schema": [
+        {
+          "name": "position_setpoint_pct",
+          "type": "number",
+          "unit": "%",
+          "range": [
+            0,
+            100
+          ],
+          "required": true
+        }
+      ],
+      "sandbox_failure_modes": [
+        "economizer_damper_stuck_closed",
+        "return_damper_stuck_open",
+        "slow_response_due_to_worn_gears",
+        "position_feedback_bias"
+      ],
+      "sandbox_notes": "Use for AHU/RTU mixing box dampers because the 10 Nm torque class is a safer fit than the LM family on larger outdoor/return dampers."
+    },
+    {
+      "id": "belimo_nmv_d3_mp_vav_compact",
+      "brand": "Belimo",
+      "category": "actuator",
+      "subtype": "vav_compact_with_integrated_dynamic_pressure_sensor",
+      "abstraction_level": "real_product_simplified_telemetry",
+      "official_reference_models": [
+        "NMV-D3-MP"
+      ],
+      "concept_roles": [
+        "conference_room_vav_box",
+        "high_priority_zone_airflow_control",
+        "airflow_measurement_reference"
+      ],
+      "catalog_basis": {
+        "official_specs": {
+          "voltage": "AC/DC 24 V",
+          "rated_torque_nm": 10,
+          "control_options": [
+            "MP-Bus",
+            "DC 2...10 V",
+            "DC 0.5...10 V"
+          ],
+          "field_of_application": "VAV units in comfort applications",
+          "applications": [
+            "VAV",
+            "CAV",
+            "position control"
+          ],
+          "protection": "IP54"
+        }
+      },
+      "telemetry_schema": [
+        {
+          "name": "airflow_setpoint_m3_h",
+          "type": "number",
+          "unit": "m3/h"
+        },
+        {
+          "name": "airflow_measured_m3_h",
+          "type": "number",
+          "unit": "m3/h"
+        },
+        {
+          "name": "damper_position_pct",
+          "type": "number",
+          "unit": "%"
+        },
+        {
+          "name": "dynamic_pressure_pa",
+          "type": "number",
+          "unit": "Pa"
+        },
+        {
+          "name": "zone_mode",
+          "type": "string",
+          "enum": [
+            "vav",
+            "cav",
+            "position"
+          ]
+        }
+      ],
+      "command_schema": [
+        {
+          "name": "airflow_setpoint_m3_h",
+          "type": "number",
+          "unit": "m3/h",
+          "required": false
+        },
+        {
+          "name": "damper_position_setpoint_pct",
+          "type": "number",
+          "unit": "%",
+          "range": [
+            0,
+            100
+          ],
+          "required": false
+        },
+        {
+          "name": "control_mode",
+          "type": "string",
+          "enum": [
+            "vav",
+            "cav",
+            "position"
+          ],
+          "required": true
+        }
+      ],
+      "sandbox_failure_modes": [
+        "pressure_pickup_tube_leak",
+        "miscalibrated_airflow_sensor",
+        "damper_blade_binding",
+        "zone_starvation_due_to_low_static_pressure"
+      ],
+      "sandbox_notes": "This is the most useful Belimo object for the conference room because it gives a physically plausible airflow loop instead of only position control."
+    },
+    {
+      "id": "belimo_22dt_12r_duct_temperature_sensor",
+      "brand": "Belimo",
+      "category": "sensor",
+      "subtype": "duct_temperature_sensor",
+      "abstraction_level": "measurement_only",
+      "official_reference_models": [
+        "22DT-12R"
+      ],
+      "concept_roles": [
+        "mixed_air_temperature",
+        "supply_air_temperature",
+        "return_air_temperature_reference"
+      ],
+      "catalog_basis": {
+        "official_specs": {
+          "voltage": "AC/DC 24 V",
+          "measured_values": [
+            "temperature"
+          ],
+          "output_options": [
+            "0...5 V",
+            "0...10 V"
+          ],
+          "probe_length_mm": 300
+        }
+      },
+      "telemetry_schema": [
+        {
+          "name": "temperature_c",
+          "type": "number",
+          "unit": "degC"
+        }
+      ],
+      "command_schema": [],
+      "sandbox_failure_modes": [
+        "bias_drift",
+        "slow_response_due_to_bad_mounting",
+        "sensor_disconnect"
+      ]
+    },
+    {
+      "id": "belimo_22dth_15m_duct_humidity_temperature_sensor",
+      "brand": "Belimo",
+      "category": "sensor",
+      "subtype": "duct_humidity_temperature_sensor",
+      "abstraction_level": "measurement_only",
+      "official_reference_models": [
+        "22DTH-15M"
+      ],
+      "concept_roles": [
+        "main_supply_humidity",
+        "return_air_humidity",
+        "latent_load_reference"
+      ],
+      "catalog_basis": {
+        "official_specs": {
+          "voltage": "AC/DC 24 V",
+          "measured_values": [
+            "humidity",
+            "temperature"
+          ],
+          "output_options": [
+            "Modbus",
+            "0...5 V",
+            "0...10 V"
+          ],
+          "probe_length_mm": 140
+        }
+      },
+      "telemetry_schema": [
+        {
+          "name": "temperature_c",
+          "type": "number",
+          "unit": "degC"
+        },
+        {
+          "name": "relative_humidity_pct",
+          "type": "number",
+          "unit": "%"
+        },
+        {
+          "name": "dew_point_c",
+          "type": "number",
+          "unit": "degC"
+        }
+      ],
+      "command_schema": [],
+      "sandbox_failure_modes": [
+        "condensation_on_probe",
+        "humidity_offset_bias",
+        "sensor_disconnect"
+      ]
+    },
+    {
+      "id": "belimo_22adp_154k_differential_pressure_sensor",
+      "brand": "Belimo",
+      "category": "sensor",
+      "subtype": "differential_pressure_sensor_air",
+      "abstraction_level": "measurement_only",
+      "official_reference_models": [
+        "22ADP-154K"
+      ],
+      "concept_roles": [
+        "filter_monitoring",
+        "main_supply_static_pressure",
+        "duct_airflow_estimation"
+      ],
+      "catalog_basis": {
+        "official_specs": {
+          "voltage": "AC/DC 24 V",
+          "measured_values": [
+            "differential pressure",
+            "volumetric flow"
+          ],
+          "communication": [
+            "Modbus RTU",
+            "0...5 V",
+            "0...10 V"
+          ],
+          "pressure_range_pa": [
+            -100,
+            2500
+          ],
+          "display": "LCD"
+        }
+      },
+      "telemetry_schema": [
+        {
+          "name": "differential_pressure_pa",
+          "type": "number",
+          "unit": "Pa"
+        },
+        {
+          "name": "estimated_airflow_m3_h",
+          "type": "number",
+          "unit": "m3/h"
+        },
+        {
+          "name": "alarm_state",
+          "type": "string",
+          "enum": [
+            "normal",
+            "high_filter_drop",
+            "low_static",
+            "sensor_fault"
+          ]
+        }
+      ],
+      "command_schema": [],
+      "sandbox_failure_modes": [
+        "clogged_pressure_tubes",
+        "auto_zero_failure",
+        "false_high_filter_drop"
+      ]
+    },
+    {
+      "id": "belimo_22rtm_5u00a_room_iaq_sensor",
+      "brand": "Belimo",
+      "category": "sensor",
+      "subtype": "room_co2_humidity_temperature_sensor",
+      "abstraction_level": "measurement_only",
+      "official_reference_models": [
+        "22RTM-5U00A"
+      ],
+      "concept_roles": [
+        "room_temperature_feedback",
+        "room_humidity_feedback",
+        "occupancy_proxy_via_co2"
+      ],
+      "catalog_basis": {
+        "official_specs": {
+          "voltage": "AC/DC 24 V",
+          "measured_values": [
+            "CO2",
+            "temperature",
+            "humidity"
+          ],
+          "communication": [
+            "Modbus RTU",
+            "BACnet MS/TP"
+          ],
+          "co2_range_ppm": [
+            0,
+            2000
+          ],
+          "humidity_range_pct": [
+            0,
+            100
+          ],
+          "temperature_range_c": [
+            0,
+            50
+          ]
+        }
+      },
+      "telemetry_schema": [
+        {
+          "name": "room_temperature_c",
+          "type": "number",
+          "unit": "degC"
+        },
+        {
+          "name": "room_relative_humidity_pct",
+          "type": "number",
+          "unit": "%"
+        },
+        {
+          "name": "room_co2_ppm",
+          "type": "number",
+          "unit": "ppm"
+        }
+      ],
+      "command_schema": [],
+      "sandbox_failure_modes": [
+        "co2_bias_due_to_bad_placement",
+        "temperature_bias_due_to_solar_gain_on_wall",
+        "communication_dropout"
+      ]
+    },
+    {
+      "id": "non_belimo_daikin_rebel_dps_rooftop_heat_pump",
+      "brand": "Daikin Applied",
+      "category": "source_equipment",
+      "subtype": "packaged_rooftop_heat_pump_unit",
+      "abstraction_level": "sandbox_simplified_non_belimo",
+      "official_reference_models": [
+        "Rebel Heat Pump & Cooling Model DPS"
+      ],
+      "concept_roles": [
+        "primary_sandbox_supply_air_source",
+        "heating_source",
+        "cooling_source",
+        "supply_fan_source"
+      ],
+      "catalog_basis": {
+        "official_specs": {
+          "heating_and_cooling": true,
+          "capacity_range_tons": [
+            3,
+            31
+          ],
+          "max_airflow_cfm": 12500,
+          "compressor": "variable speed inverter compressor",
+          "controller": "MicroTech 4",
+          "key_features": [
+            "economizer",
+            "energy recovery option",
+            "dehumidification control",
+            "supply and exhaust airflow measuring",
+            "EC or VFD fan motors"
+          ]
+        }
+      },
+      "telemetry_schema": [
+        {
+          "name": "operating_mode",
+          "type": "string",
+          "enum": [
+            "off",
+            "ventilation",
+            "cooling",
+            "heating",
+            "dehumidification",
+            "economizer"
+          ]
+        },
+        {
+          "name": "supply_air_temperature_c",
+          "type": "number",
+          "unit": "degC"
+        },
+        {
+          "name": "return_air_temperature_c",
+          "type": "number",
+          "unit": "degC"
+        },
+        {
+          "name": "outdoor_air_temperature_c",
+          "type": "number",
+          "unit": "degC"
+        },
+        {
+          "name": "supply_airflow_m3_h",
+          "type": "number",
+          "unit": "m3/h"
+        },
+        {
+          "name": "electrical_power_kw",
+          "type": "number",
+          "unit": "kW"
+        },
+        {
+          "name": "fault_state",
+          "type": "string",
+          "enum": [
+            "none",
+            "compressor_derate",
+            "fan_fault",
+            "coil_fouling",
+            "controller_fault"
+          ]
+        }
+      ],
+      "command_schema": [
+        {
+          "name": "enable",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "name": "operating_mode",
+          "type": "string",
+          "enum": [
+            "ventilation",
+            "cooling",
+            "heating",
+            "auto"
+          ],
+          "required": true
+        },
+        {
+          "name": "supply_air_temperature_setpoint_c",
+          "type": "number",
+          "unit": "degC",
+          "range": [
+            12,
+            35
+          ],
+          "required": true
+        },
+        {
+          "name": "supply_fan_speed_pct",
+          "type": "number",
+          "unit": "%",
+          "range": [
+            20,
+            100
+          ],
+          "required": true
+        }
+      ],
+      "sandbox_failure_modes": [
+        "compressor_efficiency_loss",
+        "coil_fouling",
+        "frozen_heat_pump_defrost_event",
+        "economizer_damper_command_mismatch",
+        "fan_vfd_fault"
+      ],
+      "sandbox_notes": "This is the preferred v1 sandbox source because it can produce both hot and cold supply air without introducing a full hydronic plant on day one."
+    },
+    {
+      "id": "non_belimo_trane_sintesis_rtaf_air_cooled_chiller",
+      "brand": "Trane",
+      "category": "source_equipment",
+      "subtype": "air_cooled_chiller",
+      "abstraction_level": "future_expansion_non_belimo",
+      "official_reference_models": [
+        "Sintesis Air-Cooled Chiller Model RTAF"
+      ],
+      "concept_roles": [
+        "future_central_plant_cooling_source"
+      ],
+      "catalog_basis": {
+        "official_specs": {
+          "capacity_range_tons": [
+            115,
+            500
+          ],
+          "refrigerant": "R-513A",
+          "controller": "Symbio 800",
+          "cooling_map_f_chilled_fluid": [
+            10,
+            68
+          ]
+        }
+      },
+      "telemetry_schema": [
+        {
+          "name": "leaving_chilled_water_temperature_c",
+          "type": "number",
+          "unit": "degC"
+        },
+        {
+          "name": "cooling_capacity_kw",
+          "type": "number",
+          "unit": "kW"
+        },
+        {
+          "name": "electrical_power_kw",
+          "type": "number",
+          "unit": "kW"
+        },
+        {
+          "name": "fault_state",
+          "type": "string"
+        }
+      ],
+      "command_schema": [
+        {
+          "name": "enable",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "name": "leaving_chilled_water_setpoint_c",
+          "type": "number",
+          "unit": "degC",
+          "range": [
+            4,
+            12
+          ],
+          "required": true
+        }
+      ],
+      "sandbox_notes": "Keep in the catalog for the later large-building mode where the rooftop unit is replaced by an AHU plus central chilled-water plant."
+    },
+    {
+      "id": "non_belimo_viessmann_vitocrossal_200_cm2_boiler",
+      "brand": "Viessmann",
+      "category": "source_equipment",
+      "subtype": "gas_condensing_boiler",
+      "abstraction_level": "future_expansion_non_belimo",
+      "official_reference_models": [
+        "Vitocrossal 200 CM2"
+      ],
+      "concept_roles": [
+        "future_central_plant_heating_source"
+      ],
+      "catalog_basis": {
+        "official_specs": {
+          "rated_input_mbh_single": [
+            131,
+            2245
+          ],
+          "turndown_ratio": "5:1",
+          "heat_exchanger": "stainless steel Inox-Crossal",
+          "bms_integration": true
+        }
+      },
+      "telemetry_schema": [
+        {
+          "name": "leaving_hot_water_temperature_c",
+          "type": "number",
+          "unit": "degC"
+        },
+        {
+          "name": "burner_modulation_pct",
+          "type": "number",
+          "unit": "%"
+        },
+        {
+          "name": "heating_output_kw",
+          "type": "number",
+          "unit": "kW"
+        },
+        {
+          "name": "fault_state",
+          "type": "string"
+        }
+      ],
+      "command_schema": [
+        {
+          "name": "enable",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "name": "leaving_hot_water_setpoint_c",
+          "type": "number",
+          "unit": "degC",
+          "range": [
+            35,
+            80
+          ],
+          "required": true
+        }
+      ],
+      "sandbox_notes": "Keep in the catalog for the later large-building mode where the AI also manages a hydronic heating plant."
+    }
+  ],
+  "sandbox_blueprint": {
+    "blueprint_id": "office_floor_v1",
+    "deployment_mode": "sandbox_only",
+    "topology": "One packaged rooftop heat-pump unit feeding a main supply duct, return duct, and four occupied zones with Belimo dampers and sensors.",
+    "control_strategy": [
+      "The rooftop unit sets total supply air temperature and bulk airflow.",
+      "Outdoor/return/exhaust dampers implement fresh-air and economizer logic.",
+      "Zone dampers and the VAV compact box distribute air by room demand.",
+      "Room temperature, humidity, and CO2 drive comfort and occupancy inference.",
+      "Duct pressure is used to detect starving zones, clogged filters, and fan issues."
+    ],
+    "rooms": [
+      {
+        "id": "lobby",
+        "type": "reception",
+        "area_m2": 32,
+        "occupancy_range": [
+          0,
+          8
+        ],
+        "thermal_behavior": "frequent door-driven disturbance"
+      },
+      {
+        "id": "open_office",
+        "type": "office_open_plan",
+        "area_m2": 78,
+        "occupancy_range": [
+          6,
+          24
+        ],
+        "thermal_behavior": "steady daytime internal gains"
+      },
+      {
+        "id": "meeting_room",
+        "type": "conference",
+        "area_m2": 28,
+        "occupancy_range": [
+          0,
+          12
+        ],
+        "thermal_behavior": "short sharp CO2 and temperature spikes"
+      },
+      {
+        "id": "facility_office",
+        "type": "private_office",
+        "area_m2": 18,
+        "occupancy_range": [
+          0,
+          3
+        ],
+        "thermal_behavior": "south-facing solar variation"
+      }
+    ],
+    "required_instances": [
+      {
+        "instance_id": "rtu-1",
+        "product_id": "non_belimo_daikin_rebel_dps_rooftop_heat_pump",
+        "placement": "roof",
+        "serves": [
+          "lobby",
+          "open_office",
+          "meeting_room",
+          "facility_office"
+        ]
+      },
+      {
+        "instance_id": "oa-damper-1",
+        "product_id": "belimo_nm24a_mod_air_damper_actuator",
+        "placement": "rtu_mixing_box",
+        "serves": [
+          "fresh_air_intake"
+        ]
+      },
+      {
+        "instance_id": "ra-damper-1",
+        "product_id": "belimo_nm24a_mod_air_damper_actuator",
+        "placement": "rtu_mixing_box",
+        "serves": [
+          "return_air_path"
+        ]
+      },
+      {
+        "instance_id": "ea-damper-1",
+        "product_id": "belimo_nm24a_mod_air_damper_actuator",
+        "placement": "rtu_exhaust_section",
+        "serves": [
+          "exhaust_air_path"
+        ]
+      },
+      {
+        "instance_id": "mixed-air-temp-1",
+        "product_id": "belimo_22dt_12r_duct_temperature_sensor",
+        "placement": "downstream_of_mixing_box"
+      },
+      {
+        "instance_id": "supply-air-temp-1",
+        "product_id": "belimo_22dt_12r_duct_temperature_sensor",
+        "placement": "main_supply_duct_after_conditioning_section"
+      },
+      {
+        "instance_id": "supply-air-humidity-1",
+        "product_id": "belimo_22dth_15m_duct_humidity_temperature_sensor",
+        "placement": "main_supply_duct_after_conditioning_section"
+      },
+      {
+        "instance_id": "duct-static-1",
+        "product_id": "belimo_22adp_154k_differential_pressure_sensor",
+        "placement": "main_supply_duct"
+      },
+      {
+        "instance_id": "zone-damper-lobby-1",
+        "product_id": "belimo_lm_series_sample_air_damper_actuator",
+        "placement": "branch_supply_lobby",
+        "serves": [
+          "lobby"
+        ]
+      },
+      {
+        "instance_id": "zone-damper-office-1",
+        "product_id": "belimo_lm_series_sample_air_damper_actuator",
+        "placement": "branch_supply_open_office",
+        "serves": [
+          "open_office"
+        ]
+      },
+      {
+        "instance_id": "zone-vav-meeting-1",
+        "product_id": "belimo_nmv_d3_mp_vav_compact",
+        "placement": "branch_supply_meeting_room",
+        "serves": [
+          "meeting_room"
+        ]
+      },
+      {
+        "instance_id": "zone-damper-facility-1",
+        "product_id": "belimo_lm_series_sample_air_damper_actuator",
+        "placement": "branch_supply_facility_office",
+        "serves": [
+          "facility_office"
+        ]
+      },
+      {
+        "instance_id": "room-sensor-lobby-1",
+        "product_id": "belimo_22rtm_5u00a_room_iaq_sensor",
+        "placement": "lobby_wall"
+      },
+      {
+        "instance_id": "room-sensor-office-1",
+        "product_id": "belimo_22rtm_5u00a_room_iaq_sensor",
+        "placement": "open_office_wall"
+      },
+      {
+        "instance_id": "room-sensor-meeting-1",
+        "product_id": "belimo_22rtm_5u00a_room_iaq_sensor",
+        "placement": "meeting_room_wall"
+      },
+      {
+        "instance_id": "room-sensor-facility-1",
+        "product_id": "belimo_22rtm_5u00a_room_iaq_sensor",
+        "placement": "facility_office_wall"
+      }
+    ],
+    "expansion_path": {
+      "future_topology": "Replace the packaged rooftop unit with an AHU plus chiller and boiler plant while keeping the same Belimo zone devices and sensor pipeline.",
+      "optional_future_products": [
+        "non_belimo_trane_sintesis_rtaf_air_cooled_chiller",
+        "non_belimo_viessmann_vitocrossal_200_cm2_boiler"
+      ]
+    }
+  }
+}
