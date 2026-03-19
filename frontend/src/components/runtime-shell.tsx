@@ -123,8 +123,8 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
   const [controlError, setControlError] = useState<string | null>(null);
   const [brainAlerts, setBrainAlerts] = useState<BrainAlert[]>(initialBrainAlerts ?? []);
   const [isPending, startUiTransition] = useTransition();
-  const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState(true);
-  const [isRightDrawerOpen, setIsRightDrawerOpen] = useState(true);
+  const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState(false);
+  const [isRightDrawerOpen, setIsRightDrawerOpen] = useState(false);
   const deferredRuntime = useDeferredValue(runtime);
   const heartbeatRef = useRef<number | null>(null);
   const reconnectRef = useRef<number | null>(null);
@@ -657,7 +657,7 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
           </aside>
 
           <section
-            className={`glass-panel flex flex-col p-4 transition-[margin] duration-300 ${
+            className={`flex flex-col gap-4 transition-[margin] duration-300 ${
               isLeftDrawerOpen ? "xl:ml-[23rem]" : ""
             } ${isRightDrawerOpen ? "xl:mr-[23rem]" : ""}`}
           >
@@ -672,7 +672,7 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
               />
             </div>
 
-            <div className="mt-4">
+            <div>
               <RuntimeScene
                 blueprint={initial.blueprint}
                 products={initial.products}
@@ -684,7 +684,7 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
               />
             </div>
 
-            <div className="mt-4 grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+            <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
               <CardBlock>
                 <div className="flex items-center justify-between">
                   <SectionEyebrow label="Operational Story" />
