@@ -720,12 +720,47 @@ function formatZoneToneLabel(mode: string) {
   return mode.replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-function SceneHeaderMetric({ label, value }: { label: string; value: string }) {
+function AirflowIcon() {
   return (
-    <div className="min-w-[112px] rounded-full border border-white/60 bg-white/78 px-3 py-2 text-right shadow-[0_10px_24px_rgba(15,23,42,0.08)]">
-      <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-slate-500">{label}</p>
-      <p className="mt-1 text-sm font-semibold tracking-[-0.03em] text-slate-950">{value}</p>
-    </div>
+    <svg viewBox="0 0 28 28" aria-hidden="true" className="h-6 w-6 text-slate-700">
+      <path
+        d="M5 11.5c2.1-3 5-4.5 8.8-4.5 2.2 0 4.1.5 5.9 1.4M6.5 16.5c1.8 2.7 4.5 4 8 4 3.2 0 5.9-1.1 8-3.4M18.8 8.6c1.9.9 3.3 2.4 4.2 4.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M20.5 5.8l4.2 2.6-3 3.4M18.8 18.2l4.7-.3-.9 4.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function PowerIcon() {
+  return (
+    <svg viewBox="0 0 28 28" aria-hidden="true" className="h-6 w-6 text-slate-700">
+      <path
+        d="M14 3.5v8.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+      />
+      <path
+        d="M9.2 6.8a9 9 0 1 0 9.6 0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 
@@ -809,13 +844,30 @@ export function RuntimeScene(props: RuntimeSceneProps) {
           <div className="flex items-center">
             <Image src="/belimo-wordmark.svg" alt="Belimo Pulse" width={420} height={72} className="h-7 w-auto sm:h-8" />
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <SceneHeaderMetric label="Total Air Flow" value={`${props.totalAirflowM3H.toFixed(0)} m3/h`} />
-            <SceneHeaderMetric label="Energy Draw" value={`${props.sourcePowerKw.toFixed(1)} kW`} />
+          <div className="flex flex-wrap items-center justify-end gap-3 text-slate-950">
+            <div
+              className="flex items-center gap-2"
+              aria-label={`Total air flow ${props.totalAirflowM3H.toFixed(0)} cubic meters per hour`}
+            >
+              <AirflowIcon />
+              <span className="text-base font-semibold tracking-[-0.03em]">
+                {props.totalAirflowM3H.toFixed(0)} <span className="text-sm font-medium text-slate-500">m3/h</span>
+              </span>
+            </div>
+            <span className="h-7 w-px bg-slate-300/80" aria-hidden="true" />
+            <div
+              className="flex items-center gap-2"
+              aria-label={`Energy draw ${props.sourcePowerKw.toFixed(1)} kilowatts`}
+            >
+              <PowerIcon />
+              <span className="text-base font-semibold tracking-[-0.03em]">
+                {props.sourcePowerKw.toFixed(1)} <span className="text-sm font-medium text-slate-500">kW</span>
+              </span>
+            </div>
           </div>
         </div>
       </div>
-      <div className="absolute bottom-5 right-5 z-10">
+      <div className="absolute bottom-4 right-4 z-10">
         <button
           type="button"
           onClick={() => {
@@ -836,16 +888,16 @@ export function RuntimeScene(props: RuntimeSceneProps) {
           }}
           aria-pressed={isAutoRotateEnabled}
           aria-label={isAutoRotateEnabled ? "Disable auto rotate" : "Enable auto rotate"}
-          className={`flex h-10 w-[76px] items-center rounded-full border px-1.5 transition ${
+          className={`flex h-8 w-[58px] items-center rounded-full border px-1 transition ${
             isAutoRotateEnabled
               ? "border-emerald-400/55 bg-emerald-500/92 shadow-[0_10px_24px_rgba(16,185,129,0.24)]"
               : "border-slate-200/90 bg-white/86 shadow-[0_10px_22px_rgba(15,23,42,0.08)]"
           }`}
         >
           <span
-            className={`flex h-7 w-7 items-center justify-center rounded-full text-[12px] transition-transform ${
+            className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] transition-transform ${
               isAutoRotateEnabled
-                ? "translate-x-[36px] bg-white text-emerald-600"
+                ? "translate-x-[26px] bg-white text-emerald-600"
                 : "translate-x-0 bg-slate-900 text-white"
             }`}
           >
