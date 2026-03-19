@@ -22,11 +22,11 @@
   "hunting": {
     "verdict": "HIGH_RISK",
     "severity": "fail",
-    "risk_score": 81.68201957073656,
-    "max_overshoot_pct": 40.71398750156317,
-    "avg_tracking_error": 3.894006523578852,
-    "dominant_frequency_hz": 0.022521683705829375,
-    "detail": "Hunting risk score: 82/100 \u2014 HIGH. Max overshoot: 40.7%, avg tracking error: 3.9%. This actuator-valve combination will likely oscillate under real control. Recommend reducing proportional gain by ~49%."
+    "risk_score": 81.37492336188663,
+    "max_overshoot_pct": 18.467703615950022,
+    "avg_tracking_error": 3.7916411206288787,
+    "dominant_frequency_hz": 0.022069180862405235,
+    "detail": "Hunting risk score: 81/100 \u2014 HIGH. Max overshoot: 18.5%, avg tracking error: 3.8%. This actuator-valve combination will likely oscillate under real control. Recommend reducing proportional gain by ~48%."
   },
   "health": {
     "score": 74,
@@ -47,7 +47,7 @@
     {
       "priority": "HIGH",
       "action": "Reduce PI controller proportional gain",
-      "detail": "Hunting risk score: 82/100 \u2014 HIGH. Max overshoot: 40.7%, avg tracking error: 3.9%. This actuator-valve combination will likely oscillate under real control. Recommend reducing proportional gain by ~49%."
+      "detail": "Hunting risk score: 81/100 \u2014 HIGH. Max overshoot: 18.5%, avg tracking error: 3.8%. This actuator-valve combination will likely oscillate under real control. Recommend reducing proportional gain by ~48%."
     }
   ]
 }

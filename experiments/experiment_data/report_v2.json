@@ -110,88 +110,88 @@
     "avg_transit_time_s": 7.06,
     "transit_times": [
       {
-        "from": 0,
-        "to": 25,
+        "from": "0",
+        "to": "25",
         "transit_s": 5.43,
-        "step_size": 25
+        "step_size": "25"
       },
       {
-        "from": 0,
-        "to": 50,
+        "from": "0",
+        "to": "50",
         "transit_s": 10.39,
-        "step_size": 50
+        "step_size": "50"
       },
       {
-        "from": 0,
-        "to": 100,
+        "from": "0",
+        "to": "100",
         "transit_s": null,
-        "step_size": 100
+        "step_size": "100"
       },
       {
-        "from": 25,
-        "to": 0,
+        "from": "25",
+        "to": "0",
         "transit_s": 5.49,
-        "step_size": 25
+        "step_size": "25"
       },
       {
-        "from": 25,
-        "to": 50,
+        "from": "25",
+        "to": "50",
         "transit_s": 5.69,
-        "step_size": 25
+        "step_size": "25"
       },
       {
-        "from": 50,
-        "to": 0,
+        "from": "50",
+        "to": "0",
         "transit_s": 10.19,
-        "step_size": 50
+        "step_size": "50"
       },
       {
-        "from": 50,
-        "to": 25,
+        "from": "50",
+        "to": "25",
         "transit_s": 5.47,
-        "step_size": 25
+        "step_size": "25"
       },
       {
-        "from": 50,
-        "to": 75,
+        "from": "50",
+        "to": "75",
         "transit_s": 5.29,
-        "step_size": 25
+        "step_size": "25"
       },
       {
-        "from": 50,
-        "to": 100,
+        "from": "50",
+        "to": "100",
         "transit_s": 10.32,
-        "step_size": 50
+        "step_size": "50"
       },
       {
-        "from": 75,
-        "to": 50,
+        "from": "75",
+        "to": "50",
         "transit_s": 5.46,
-        "step_size": 25
+        "step_size": "25"
       },
       {
-        "from": 75,
-        "to": 100,
+        "from": "75",
+        "to": "100",
         "transit_s": 5.49,
-        "step_size": 25
+        "step_size": "25"
       },
       {
-        "from": 100,
-        "to": 0,
+        "from": "100",
+        "to": "0",
         "transit_s": null,
-        "step_size": 100
+        "step_size": "100"
       },
       {
-        "from": 100,
-        "to": 50,
+        "from": "100",
+        "to": "50",
         "transit_s": 10.35,
-        "step_size": 50
+        "step_size": "50"
       },
       {
-        "from": 100,
-        "to": 75,
+        "from": "100",
+        "to": "75",
         "transit_s": 5.21,
-        "step_size": 25
+        "step_size": "25"
       }
     ],
     "avg_overshoot_pct": 0.0,

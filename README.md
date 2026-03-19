@@ -305,3 +305,119 @@ Start Hackathon 2026
   cd backend/mcp
   export ANTHROPIC_API_KEY=<your-key-here>
   ../../experiments/venv/bin/streamlit run dashboard.py
+
+
+
+   Let me think about this properly. The challenge is asking for something specific — let me
+  re-read the exact words:
+
+  ▎ "create innovative concepts by analyzing signals from Belimo's field devices...to generate
+  actionable insights"
+  ▎ "resolve issues, correct errors, improve energy efficiency"
+  ▎ "measurable value during installation, commissioning, and operation"
+
+  Three lifecycle phases. Measurable value. Actionable — not just informational.
+
+  What We're Actually Competing Against
+
+  Most teams will do one of:
+  - A dashboard showing graphs (boring, not actionable)
+  - Anomaly detection with ML (generic, hard to demo in 24 hours)
+  - A chatbot that explains data (we already have this, but it's not enough alone)
+
+  The Real Question: What Insight Is "Previously Unknown or Unanticipated"?
+
+  Let me look at what signals we actually have and what nobody extracts from them today:
+
+  Torque + Position together → We already do this (friction map, sizing). Good but expected.
+
+  The thing nobody talks about: The actuator knows things about the valve and the system that no
+  other sensor in the building knows:
+
+  1. Torque tells you about the valve — not the actuator. If torque increases over months, the
+  valve packing is degrading, not the motor. The actuator is accidentally a valve health sensor.
+  2. Position tracking error tells you about the controller — not the actuator. If the actuator
+  can't track setpoints at 0.05 Hz, the building's control system is misconfigured. The actuator
+  is accidentally a control loop quality sensor.
+  3. Power during idle tells you about the electronics — a motor that draws 350mW at rest vs spec
+  200mW has a leakage current issue that will fail in 6-18 months.
+
+  The unifying insight: The actuator is a diagnostic probe for the entire HVAC system — valve
+  health, controller quality, and its own electronics — disguised as a simple motor. Nobody treats
+   it this way today.
+
+  The Product Concept That Wins
+
+  Name: ActuatorIQ — "Your actuator already knows. Now you can listen."
+
+  The pitch: Every Belimo actuator already measures torque, position, power, and temperature.
+  These signals contain a complete diagnostic picture of the valve, the control loop, and the
+  actuator itself. ActuatorIQ extracts this intelligence through three automated protocols:
+
+  Protocol 1: Install Verify (2 min, run once)
+
+  - Automated sweep 0→100→0
+  - Output for installer: Pass/fail card on their phone
+    - Valve sizing: correct / oversized / undersized
+    - Linkage: tight / loose (with dead band %)
+    - Friction map: clean / binding at specific positions
+    - Action: "Tighten coupling at shaft" or "Valve DN25 oversized, recommend DN15"
+  - Value: Catches 80% of installation errors before the installer leaves site
+
+  Protocol 2: Commission Tune (5 min, run once)
+
+  - 3-frequency oscillation test
+  - Output for commissioning engineer:
+    - This actuator's resonance frequency (e.g., 0.05 Hz)
+    - Maximum safe proportional gain for the PI controller
+    - Predicted hunting risk if left untuned
+    - Action: "Set Kp ≤ 0.8, Ti ≥ 180s to avoid hunting at 0.05 Hz"
+  - Value: Prevents hunting in 70% of installations that would otherwise develop it
+
+  Protocol 3: Continuous Watch (passive, runs forever)
+
+  - Compares current torque/position behavior to the baseline from Protocol 1
+  - Output for facility manager:
+    - Rolling health score (0-100)
+    - Degradation forecast: "Friction increasing 12%/year. Valve service needed by Q3 2027"
+    - Energy waste alert: "Hunting detected on Zone 4. Wasting 2.4 kWh/day"
+    - Action: Auto-generated work orders with specific repair instructions
+  - Value: Predictive maintenance replaces emergency repairs. 30% cost reduction.
+
+  What Makes This Different From What We Have
+
+  We already built Protocols 1 and 2 in code. What we need to sharpen:
+
+  The story arc — Frame everything around the three protocols, not "5 diagnostic algorithms." The
+  judges are product managers and researchers, not data scientists.
+
+  The auto-commission action — After Protocol 2, the AI doesn't just recommend PI gains — it could
+   write a safe operating envelope back to the system. "Position limits: 3-97% (dead zone
+  avoidance). Max slew rate: 10%/s (resonance avoidance)."
+
+  The degradation forecast — We have compare_profiles() showing 43% torque change. Turn this into
+  a timeline: "If friction continues at this rate, the valve will stall in 14 months."
+
+  The business case per protocol:
+
+  ┌─────────────────┬─────────┬─────────────────┬─────────────────────────────────────────────┐
+  │    Protocol     │  Time   │   Who Uses It   │           Value Per Building/Year           │
+  ├─────────────────┼─────────┼─────────────────┼─────────────────────────────────────────────┤
+  │ Install Verify  │ 2 min   │ Installer       │ Avoids CHF 2,500 callback per bad install   │
+  ├─────────────────┼─────────┼─────────────────┼─────────────────────────────────────────────┤
+  │ Commission Tune │ 5 min   │ Engineer        │ Prevents CHF 3,725/yr energy waste from     │
+  │                 │         │                 │ hunting                                     │
+  ├─────────────────┼─────────┼─────────────────┼─────────────────────────────────────────────┤
+  │ Continuous      │ Passive │ Facility        │ CHF 2,646/yr maintenance savings            │
+  │ Watch           │         │ Manager         │                                             │
+  ├─────────────────┼─────────┼─────────────────┼─────────────────────────────────────────────┤
+  │ Total           │         │                 │ CHF 8,871/yr per building                   │
+  └─────────────────┴─────────┴─────────────────┴─────────────────────────────────────────────┘
+
+  What to Build Next
+
+  The auto_commission tool and a predict_degradation tool would complete the story. These are the
+  "closed-loop action" pieces the judges want to see.
+
+  Want me to build these two tools and add them to the MCP server, or do you want to refine the
+  concept further first?

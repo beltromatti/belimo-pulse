@@ -359,6 +359,430 @@ def estimate_maintenance_savings(
 
 
 @mcp.tool()
+def auto_commission(rated_torque: float = 5000) -> str:
+    """Generate optimal control parameters and operating envelope for this actuator.
+
+    Reads the health report and hunting data, then computes:
+    - Safe position limits (avoiding dead zones at extremes)
+    - Maximum recommended slew rate (to avoid resonance)
+    - Recommended PI controller gains (Kp, Ti)
+    - Operating envelope summary for the commissioning engineer
+
+    This is the "closed-loop action" — the AI doesn't just diagnose, it prescribes.
+
+    Args:
+        rated_torque: Rated torque in Nmm (5000 for LM, 1000 for CQ)
+    """
+    report = _load_json("report_v2.json")
+    if not report:
+        return json.dumps({"error": "No health report. Run analysis first."})
+
+    result = {
+        "protocol": "auto_commission",
+        "actuator_model": report.get("actuator_model", "LM"),
+        "rated_torque_nmm": rated_torque,
+    }
+
+    # 1. Position limits — find dead zones from friction map
+    friction = report.get("friction", {})
+    torque_bins = friction.get("torque_std_by_bin", [])
+
+    min_position = 0.0
+    max_position = 100.0
+
+    if torque_bins:
+        # Find where torque is too low at extremes (dead zone)
+        overall_mean = np.mean([b["torque_mean"] for b in torque_bins])
+        dead_threshold = overall_mean * 0.3  # below 30% of mean = dead zone
+
+        # Scan from low end
+        for b in torque_bins:
+            if b["torque_mean"] < dead_threshold:
+                min_position = b["position"] + 2.5  # skip this bin
+            else:
+                break
+
+        # Scan from high end
+        for b in reversed(torque_bins):
+            if b["torque_mean"] < dead_threshold:
+                max_position = b["position"] - 2.5
+            else:
+                break
+
+    result["position_limits"] = {
+        "min_pct": round(max(0, min_position), 1),
+        "max_pct": round(min(100, max_position), 1),
+        "reason": (
+            f"Effective range: {max(0, min_position):.0f}–{min(100, max_position):.0f}%. "
+            f"Below {max(0, min_position):.0f}% and above {min(100, max_position):.0f}% "
+            f"the actuator is in dead zone with insufficient torque for reliable control."
+        ),
+    }
+
+    # 2. Linkage dead band compensation
+    linkage = report.get("linkage", {})
+    dead_band = linkage.get("dead_band_pct", 0)
+    result["dead_band_compensation"] = {
+        "dead_band_pct": dead_band,
+        "compensate": dead_band > 2.0,
+        "offset_pct": round(dead_band * 1.2, 1) if dead_band > 2.0 else 0,
+        "reason": (
+            f"Dead band: {dead_band}%. "
+            + ("Offset setpoint by {:.1f}% to compensate.".format(dead_band * 1.2) if dead_band > 2.0
+               else "No compensation needed — linkage is tight.")
+        ),
+    }
+
+    # 3. Hunting prevention — compute max safe frequency and PI gains
+    hunting = report.get("hunting", {})
+    per_config = hunting.get("per_config_results", [])
+    resonance_freq = None
+    max_safe_freq = None
+
+    if per_config:
+        # Find frequency with worst overshoot
+        worst = max(per_config, key=lambda c: c.get("max_overshoot_pct", 0))
+        resonance_freq = worst.get("frequency_hz")
+
+        # Find highest frequency with < 5% overshoot
+        safe_configs = [c for c in per_config if c.get("max_overshoot_pct", 0) < 5.0]
+        if safe_configs:
+            max_safe_freq = max(c["frequency_hz"] for c in safe_configs)
+        else:
+            max_safe_freq = min(c["frequency_hz"] for c in per_config) * 0.5
+
+    # Compute recommended PI gains
+    # Kp: proportional gain. Higher Kp = faster response but more overshoot
+    # Ti: integral time. Longer Ti = less oscillation
+    # Rule: set control loop bandwidth to 1/3 of resonance frequency
+    if resonance_freq and resonance_freq > 0:
+        target_bandwidth = resonance_freq / 3
+        recommended_kp = round(min(2.0, target_bandwidth * 20), 2)
+        recommended_ti = round(max(60, 1.0 / (target_bandwidth * 0.5)), 0)
+        max_slew_rate = round(resonance_freq * 50, 1)  # %/s
+    else:
+        recommended_kp = 1.0
+        recommended_ti = 180
+        max_slew_rate = 5.0
+
+    risk_score = hunting.get("risk_score", 0)
+    result["hunting_prevention"] = {
+        "resonance_frequency_hz": resonance_freq,
+        "max_safe_frequency_hz": max_safe_freq,
+        "max_slew_rate_pct_per_s": max_slew_rate,
+        "recommended_kp": recommended_kp,
+        "recommended_ti_s": recommended_ti,
+        "hunting_risk_score": risk_score,
+        "reason": (
+            f"Resonance detected at {resonance_freq:.3f} Hz. "
+            f"Limit control bandwidth to {max_safe_freq:.3f} Hz. "
+            f"Recommended PI: Kp={recommended_kp}, Ti={recommended_ti:.0f}s. "
+            f"Max setpoint slew rate: {max_slew_rate}%/s."
+            if resonance_freq else
+            "No hunting data available. Using conservative defaults."
+        ),
+    }
+
+    # 4. Transit speed characterization
+    steps = report.get("steps", {})
+    avg_transit = steps.get("avg_transit_time_s", 0)
+    if avg_transit > 0:
+        speed_pct_per_s = round(25.0 / avg_transit, 2)  # 25% steps
+    else:
+        speed_pct_per_s = 0.67  # LM spec: 150s for 100% = 0.67%/s
+
+    result["actuator_speed"] = {
+        "measured_speed_pct_per_s": speed_pct_per_s,
+        "full_stroke_time_s": round(100 / speed_pct_per_s, 1) if speed_pct_per_s > 0 else 150,
+        "reason": f"Measured speed: {speed_pct_per_s}%/s. Full stroke: {100/speed_pct_per_s:.0f}s.",
+    }
+
+    # 5. Overall commissioning summary
+    health = report.get("health", {})
+    result["summary"] = {
+        "health_score": health.get("score", 0),
+        "grade": health.get("grade", "?"),
+        "commission_ready": health.get("score", 0) >= 60,
+        "critical_actions": [],
+    }
+
+    if dead_band > 4:
+        result["summary"]["critical_actions"].append("FIX: Tighten shaft coupling (dead band > 4%)")
+    if risk_score > 60:
+        result["summary"]["critical_actions"].append(f"TUNE: Reduce Kp to {recommended_kp}, increase Ti to {recommended_ti}s")
+    sizing = report.get("sizing", {})
+    if sizing.get("verdict") in ("OVERSIZED", "UNDERSIZED") and sizing.get("severity") == "fail":
+        result["summary"]["critical_actions"].append(f"REPLACE: Valve is {sizing['verdict'].lower()}")
+
+    if not result["summary"]["critical_actions"]:
+        result["summary"]["critical_actions"].append("No critical issues. Ready for commissioning.")
+
+    result["commissioning_card"] = (
+        f"=== COMMISSIONING PARAMETERS ===\n"
+        f"Position range: {result['position_limits']['min_pct']:.0f}% – {result['position_limits']['max_pct']:.0f}%\n"
+        f"Dead band compensation: {result['dead_band_compensation']['offset_pct']}%\n"
+        f"PI gains: Kp = {recommended_kp}, Ti = {recommended_ti:.0f}s\n"
+        f"Max slew rate: {max_slew_rate}%/s\n"
+        f"Actuator speed: {speed_pct_per_s}%/s ({100/speed_pct_per_s:.0f}s full stroke)\n"
+        f"Health: {health.get('score', 0)}/100 ({health.get('grade', '?')})\n"
+        f"Hunting risk: {risk_score:.0f}/100\n"
+        f"================================"
+    )
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def predict_degradation(
+    baseline_test: int = 100,
+    current_test: int = 400,
+    months_between: float = 6,
+    rated_torque: float = 5000,
+) -> str:
+    """Predict actuator and valve degradation by comparing two sweep profiles over time.
+
+    Computes degradation rates and forecasts when maintenance will be needed.
+    Uses torque trending (valve packing wear), transit time trending (motor degradation),
+    and friction pattern changes (mechanical wear).
+
+    Args:
+        baseline_test: Test number of earlier sweep (default 100)
+        current_test: Test number of later sweep (default 400)
+        months_between: Time elapsed between the two sweeps in months (default 6)
+        rated_torque: Rated torque in Nmm (5000 for LM)
+    """
+    base_path = DATA_DIR / f"sweep_test{baseline_test}.csv"
+    curr_path = DATA_DIR / f"sweep_test{current_test}.csv"
+
+    if not base_path.exists():
+        return json.dumps({"error": f"Baseline not found: sweep_test{baseline_test}.csv"})
+    if not curr_path.exists():
+        return json.dumps({"error": f"Current not found: sweep_test{current_test}.csv"})
+
+    df_base = pd.read_csv(base_path)
+    df_curr = pd.read_csv(curr_path)
+
+    result = {
+        "protocol": "degradation_forecast",
+        "baseline_test": baseline_test,
+        "current_test": current_test,
+        "months_between": months_between,
+    }
+
+    # 1. Torque trending — valve packing wear indicator
+    base_torque_mean = float(df_base["torque_nmm"].abs().mean())
+    curr_torque_mean = float(df_curr["torque_nmm"].abs().mean())
+    torque_change_pct = ((curr_torque_mean - base_torque_mean) / max(base_torque_mean, 0.01)) * 100
+    torque_rate = torque_change_pct / max(months_between, 0.1)
+
+    # Stall threshold: when mean torque reaches 80% of rated
+    stall_torque = rated_torque * 0.8
+    if torque_rate > 0 and curr_torque_mean < stall_torque:
+        remaining_nmm = stall_torque - curr_torque_mean
+        rate_nmm_per_month = (curr_torque_mean - base_torque_mean) / max(months_between, 0.1)
+        if rate_nmm_per_month > 0:
+            months_to_stall = remaining_nmm / rate_nmm_per_month
+        else:
+            months_to_stall = None
+    else:
+        months_to_stall = None
+
+    result["torque_trend"] = {
+        "baseline_mean_nmm": round(base_torque_mean, 2),
+        "current_mean_nmm": round(curr_torque_mean, 2),
+        "change_pct": round(torque_change_pct, 1),
+        "rate_pct_per_month": round(torque_rate, 2),
+        "months_to_stall": round(months_to_stall, 0) if months_to_stall else None,
+        "interpretation": (
+            "Torque increasing — valve friction growing. "
+            + (f"At current rate, valve will stall in ~{months_to_stall:.0f} months."
+               if months_to_stall and months_to_stall < 120
+               else "No stall risk in foreseeable future.")
+            if torque_rate > 1 else
+            "Torque stable or decreasing — no valve packing wear detected."
+        ),
+    }
+
+    # 2. Friction pattern changes — per-position comparison
+    n_bins = 10
+    friction_changes = []
+    for start in range(0, 100, n_bins):
+        end = start + n_bins
+        b_mask = (df_base["position"] >= start) & (df_base["position"] < end)
+        c_mask = (df_curr["position"] >= start) & (df_curr["position"] < end)
+        b_torque = df_base.loc[b_mask, "torque_nmm"].abs()
+        c_torque = df_curr.loc[c_mask, "torque_nmm"].abs()
+
+        if len(b_torque) > 0 and len(c_torque) > 0:
+            b_mean = float(b_torque.mean())
+            c_mean = float(c_torque.mean())
+            change = ((c_mean - b_mean) / max(b_mean, 0.01)) * 100
+            friction_changes.append({
+                "position_range": f"{start}-{end}%",
+                "baseline_nmm": round(b_mean, 2),
+                "current_nmm": round(c_mean, 2),
+                "change_pct": round(change, 1),
+            })
+
+    # Find worst degradation zone
+    if friction_changes:
+        worst_zone = max(friction_changes, key=lambda x: x["change_pct"])
+    else:
+        worst_zone = None
+
+    result["friction_pattern"] = {
+        "per_position": friction_changes,
+        "worst_zone": worst_zone,
+        "interpretation": (
+            f"Worst degradation at {worst_zone['position_range']}: "
+            f"+{worst_zone['change_pct']:.0f}% torque increase. "
+            f"Indicates localized wear or contamination in that valve range."
+            if worst_zone and worst_zone["change_pct"] > 20
+            else "Friction pattern stable across all positions."
+        ),
+    }
+
+    # 3. Transit time trending — motor health
+    # Compare if step data exists
+    base_steps = sorted(DATA_DIR.glob(f"steps_test*.csv"))
+    transit_trend = None
+    if base_steps:
+        df_steps = pd.read_csv(base_steps[0])
+        if "step_from" in df_steps.columns and "step_to" in df_steps.columns:
+            # Compute average transit from step data
+            valid_transits = []
+            for _, group in df_steps.groupby(["step_from", "step_to"]):
+                group = group.sort_values("time_s")
+                if len(group) >= 3:
+                    step_size = abs(group["step_to"].iloc[0] - group["step_from"].iloc[0])
+                    if step_size > 0:
+                        duration = group["time_s"].iloc[-1] - group["time_s"].iloc[0]
+                        speed = step_size / max(duration, 0.1)
+                        valid_transits.append(speed)
+            if valid_transits:
+                avg_speed = np.mean(valid_transits)
+                spec_speed = 100 / 150  # LM spec: 150s full stroke
+                speed_ratio = avg_speed / spec_speed
+                transit_trend = {
+                    "measured_speed_pct_per_s": round(avg_speed, 2),
+                    "spec_speed_pct_per_s": round(spec_speed, 2),
+                    "speed_vs_spec_pct": round(speed_ratio * 100, 1),
+                    "interpretation": (
+                        "Motor running at spec speed — no degradation."
+                        if speed_ratio > 0.85
+                        else f"Motor {(1-speed_ratio)*100:.0f}% slower than spec — may indicate wear."
+                    ),
+                }
+
+    result["motor_health"] = transit_trend or {
+        "interpretation": "No step response data available for motor speed assessment."
+    }
+
+    # 4. Overall forecast
+    issues = []
+    if torque_rate > 5:
+        issues.append(f"CRITICAL: Torque rising {torque_rate:.1f}%/month — schedule valve service")
+    elif torque_rate > 2:
+        issues.append(f"WATCH: Torque rising {torque_rate:.1f}%/month — monitor quarterly")
+
+    if worst_zone and worst_zone["change_pct"] > 50:
+        issues.append(f"CRITICAL: Friction spike at {worst_zone['position_range']} — inspect valve")
+    elif worst_zone and worst_zone["change_pct"] > 20:
+        issues.append(f"WATCH: Friction increasing at {worst_zone['position_range']}")
+
+    if not issues:
+        issues.append("No degradation detected. Next check recommended in 6 months.")
+
+    # Estimated remaining life
+    if months_to_stall and months_to_stall < 120:
+        remaining_years = months_to_stall / 12
+        service_date = f"~{remaining_years:.1f} years from now"
+    else:
+        service_date = "No service needed in foreseeable future (5+ years)"
+
+    result["forecast"] = {
+        "issues": issues,
+        "next_service": service_date,
+        "next_check_months": 6 if any("WATCH" in i for i in issues) else 12,
+        "overall_trend": (
+            "DEGRADING" if torque_rate > 2 else
+            "STABLE" if abs(torque_rate) < 1 else
+            "IMPROVING"
+        ),
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def run_install_verify() -> str:
+    """Run the complete Install Verify protocol (Protocol 1).
+
+    This is the 2-minute automated test an installer runs after mounting the actuator.
+    It performs a sweep, analyzes it, generates commissioning parameters, and returns
+    a pass/fail installation card.
+
+    Requires live connection to the actuator via InfluxDB.
+    """
+    if not _check_influx():
+        # Fallback to cached data
+        report = _load_json("report_v2.json")
+        if not report:
+            return json.dumps({"error": "No live connection and no cached data."})
+
+        commission = json.loads(auto_commission())
+        return json.dumps({
+            "protocol": "install_verify",
+            "mode": "cached",
+            "health_score": report["health"]["score"],
+            "grade": report["health"]["grade"],
+            "sizing": report["sizing"]["verdict"],
+            "linkage": report["linkage"]["verdict"],
+            "friction": report["friction"]["verdict"],
+            "commissioning": commission,
+            "pass_fail": "PASS" if report["health"]["score"] >= 60 else "FAIL",
+            "note": "Results from cached data. Connect to actuator for live verification.",
+        }, indent=2)
+
+    try:
+        from experiments import experiment_sweep
+        # Run fast single sweep
+        csv_path = experiment_sweep(test_number=800, n_repeats=1)
+
+        # Analyze it
+        from analysis_v2 import run_full_analysis
+        report = run_full_analysis(str(DATA_DIR))
+
+        if not report:
+            return json.dumps({"error": "Sweep completed but analysis failed."})
+
+        # Save report
+        from analysis_v2 import save_report
+        save_report(report, str(DATA_DIR / "report_v2.json"))
+
+        # Generate commissioning parameters
+        commission = json.loads(auto_commission())
+
+        health = report.health
+        return json.dumps({
+            "protocol": "install_verify",
+            "mode": "live",
+            "sweep_file": csv_path.name,
+            "health_score": health.score,
+            "grade": health.grade,
+            "sizing": _dataclass_to_dict(report.sizing),
+            "linkage": _dataclass_to_dict(report.linkage),
+            "friction": {"verdict": report.friction.verdict, "smoothness": report.friction.smoothness_score},
+            "commissioning": commission,
+            "pass_fail": "PASS" if health.score >= 60 else "FAIL",
+            "recommendations": report.recommendations,
+        }, indent=2, default=str)
+
+    except Exception as e:
+        return json.dumps({"error": f"Install verify failed: {e}"})
+
+
+@mcp.tool()
 def compare_profiles(baseline_test: int = 100, current_test: int = 400) -> str:
     """Compare two sweep profiles to detect degradation or fault changes.
     Shows torque drift, friction change, and health score delta between two test runs.
