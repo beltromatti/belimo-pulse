@@ -11,6 +11,7 @@ import {
   BuildingBlueprint,
   DeviceDefinition,
   DeviceDiagnosis,
+  DeviceTelemetryRecord,
   ProductDefinition,
   SandboxTickResult,
   TwinSnapshot,
@@ -27,6 +28,7 @@ type RuntimeSceneProps = {
   selectedZoneId: string | null;
   worstZoneId: string | null;
   onSelectZone: (zoneId: string) => void;
+  onSelectDevice: (deviceId: string) => void;
   totalAirflowM3H: number;
   sourcePowerKw: number;
   onReturnToPortfolio?: () => void;
@@ -427,7 +429,7 @@ function DeviceHoverCard({
     <div
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
-      className="min-w-[156px] rounded-[1.15rem] border border-white/80 bg-white/95 px-2.5 py-2 shadow-[0_14px_28px_rgba(15,23,42,0.16)] backdrop-blur"
+      className="relative min-w-[156px] rounded-[1.15rem] border border-white/80 bg-white/95 px-2.5 py-2 shadow-[0_14px_28px_rgba(15,23,42,0.16)] backdrop-blur"
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -437,6 +439,7 @@ function DeviceHoverCard({
         <span className="mt-0.5 h-2 w-2 rounded-full" style={{ backgroundColor: statusTone }} />
       </div>
       <p className="mt-2 text-[12px] text-slate-700">{summary.detail}</p>
+      <div className="pointer-events-none absolute left-1/2 top-full h-3 w-3 -translate-x-1/2 -translate-y-[1px] rotate-45 border-b border-r border-white/75 bg-white/95" />
     </div>
   );
 }
@@ -538,7 +541,7 @@ function DeviceHealthIndicator({
       ) : null}
       {isCritical ? (
         <Html position={[position[0], position[1] + 0.55, position[2]]} transform occlude distanceFactor={10}>
-          <div className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[11px] font-bold text-white shadow-lg">
+          <div className="pointer-events-none flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[11px] font-bold text-white shadow-lg">
             !
           </div>
         </Html>
@@ -574,6 +577,7 @@ function RuntimeSceneContent({
   selectedZoneId,
   worstZoneId,
   onSelectZone,
+  onSelectDevice,
   autoRotateActive,
   controlsRef,
   onHoverStateChange,
@@ -626,6 +630,11 @@ function RuntimeSceneContent({
   const handleRoomClick = (event: ThreeEvent<MouseEvent>, zoneId: string) => {
     event.stopPropagation();
     onSelectZone(zoneId);
+  };
+
+  const handleDeviceClick = (event: ThreeEvent<MouseEvent>, deviceId: string) => {
+    event.stopPropagation();
+    onSelectDevice(deviceId);
   };
 
   const cancelRoomHoverClose = () => {
@@ -935,6 +944,7 @@ function RuntimeSceneContent({
               diagnosis={diagnosis}
             >
               <group
+                onClick={(event) => handleDeviceClick(event, device.id)}
                 onPointerOver={(event) => {
                   event.stopPropagation();
                   cancelDeviceHoverClose();
@@ -958,7 +968,7 @@ function RuntimeSceneContent({
                 <Html
                   position={[
                     point.x + transform.positionOffset[0],
-                    point.y + transform.positionOffset[1] + 0.72,
+                    point.y + transform.positionOffset[1] + 1.08,
                     point.z + transform.positionOffset[2],
                   ]}
                   transform
@@ -1085,6 +1095,11 @@ export function RuntimeScene(props: RuntimeSceneProps) {
             </div>
           </div>
         </div>
+      </div>
+      <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center">
+        <p className="text-[11px] font-medium tracking-[0.16em] text-slate-400/90">
+          press on a component to inspect
+        </p>
       </div>
       <Canvas
         orthographic

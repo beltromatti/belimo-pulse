@@ -15,11 +15,13 @@ import {
 import {
   ActiveControlPolicy,
   BrainAlert,
+  DeviceDefinition,
   DeviceDiagnosis,
   DeviceTelemetryRecord,
   FacilityModePreference,
   FaultOverrideMode,
   OperatorPolicy,
+  ProductDefinition,
   RuntimeBootstrapPayload,
   RuntimeControlState,
   RuntimeSocketMessage,
@@ -27,7 +29,7 @@ import {
 } from "@/lib/runtime-types";
 import { BrandLockup } from "@/components/brand-lockup";
 import { ChatPanel } from "@/components/chat-panel";
-import { InventoryPanel } from "@/components/inventory-panel";
+import { ProductModelPreview } from "@/components/product-model-preview";
 
 const RuntimeScene = dynamic(
   () => import("@/components/runtime-scene").then((module) => module.RuntimeScene),
@@ -107,6 +109,77 @@ function formatAppliedControlPath(path: string, initial: RuntimeBootstrapPayload
   return formatModeLabel(path);
 }
 
+function formatLabel(value: string) {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function formatValue(value: unknown): string | null {
+  if (typeof value === "boolean") {
+    return value ? "Yes" : "No";
+  }
+
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => formatValue(entry)).filter(Boolean).join(" / ");
+  }
+
+  return null;
+}
+
+function extractTechnicalSpecs(product: ProductDefinition) {
+  const officialSpecs =
+    product.catalog_basis && typeof product.catalog_basis === "object" && "official_specs" in product.catalog_basis
+      ? (product.catalog_basis.official_specs as Record<string, unknown>)
+      : null;
+
+  if (!officialSpecs) {
+    return [];
+  }
+
+  return Object.entries(officialSpecs)
+    .map(([key, value]) => ({
+      label: formatLabel(key),
+      value: formatValue(value),
+    }))
+    .filter((entry): entry is { label: string; value: string } => Boolean(entry.value))
+    .slice(0, 4);
+}
+
+function getTelemetryHighlights(reading: DeviceTelemetryRecord | null) {
+  if (!reading) {
+    return [];
+  }
+
+  return Object.entries(reading.telemetry)
+    .filter(([, value]) => typeof value === "number" || typeof value === "string")
+    .slice(0, 4)
+    .map(([key, value]) => ({
+      label: formatLabel(key),
+      value: typeof value === "number" ? value.toFixed(Number.isInteger(value) ? 0 : 1) : value,
+    }));
+}
+
+function formatDeviceKind(kind: DeviceDefinition["kind"]) {
+  if (kind === "source_equipment") {
+    return "Source Equipment";
+  }
+
+  return formatLabel(kind);
+}
+
+function getDeviceDisplayName(product: ProductDefinition) {
+  return product.official_reference_models[0] ?? formatLabel(product.subtype);
+}
+
 function getSourceReading(readings: DeviceTelemetryRecord[] | undefined) {
   return readings?.find((reading) => reading.deviceId === "rtu-1") ?? null;
 }
@@ -170,6 +243,7 @@ export function RuntimeShell({
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(
     initial.latestTwinSnapshot?.summary.worstZoneId ?? initial.blueprint.spaces[0]?.id ?? null,
   );
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
   const [brainAlerts, setBrainAlerts] = useState<BrainAlert[]>(initialBrainAlerts ?? []);
   const [brainPolicies, setBrainPolicies] = useState<OperatorPolicy[]>(initialBrainPolicies ?? []);
@@ -191,6 +265,17 @@ export function RuntimeShell({
     [deferredRuntime.twin?.zones, selectedZoneId],
   );
 
+  const deviceById = useMemo(() => new Map(initial.blueprint.devices.map((device) => [device.id, device])), [initial.blueprint.devices]);
+  const productById = useMemo(() => new Map(initial.products.map((product) => [product.id, product])), [initial.products]);
+  const diagnosisByDeviceId = useMemo(
+    () => new Map((deferredRuntime.twin?.devices ?? []).map((device) => [device.deviceId, device])),
+    [deferredRuntime.twin?.devices],
+  );
+  const telemetryByDeviceId = useMemo(
+    () => new Map((deferredRuntime.sandbox?.deviceReadings ?? []).map((reading) => [reading.deviceId, reading])),
+    [deferredRuntime.sandbox?.deviceReadings],
+  );
+
   const selectedZoneDevices = useMemo(() => {
     if (!selectedZoneId || !deferredRuntime.twin) {
       return [];
@@ -203,6 +288,44 @@ export function RuntimeShell({
   const selectedZoneAlertDevices = useMemo(
     () => selectedZoneDevices.filter((device) => device.alerts.length > 0 || device.healthScore < 92),
     [selectedZoneDevices],
+  );
+
+  const selectedDevice = useMemo(
+    () => (selectedDeviceId ? deviceById.get(selectedDeviceId) ?? null : null),
+    [deviceById, selectedDeviceId],
+  );
+
+  const selectedDeviceProduct = useMemo(
+    () => (selectedDevice ? productById.get(selectedDevice.product_id) ?? null : null),
+    [productById, selectedDevice],
+  );
+
+  const selectedDeviceDiagnosis = useMemo(
+    () => (selectedDevice ? diagnosisByDeviceId.get(selectedDevice.id) ?? null : null),
+    [diagnosisByDeviceId, selectedDevice],
+  );
+
+  const selectedTelemetryReading = useMemo(
+    () => (selectedDevice ? telemetryByDeviceId.get(selectedDevice.id) ?? null : null),
+    [selectedDevice, telemetryByDeviceId],
+  );
+
+  const selectedDeviceSpaces = useMemo(
+    () =>
+      selectedDevice
+        ? initial.blueprint.spaces.filter((space) => selectedDevice.served_space_ids.includes(space.id))
+        : [],
+    [initial.blueprint.spaces, selectedDevice],
+  );
+
+  const selectedDeviceTechnicalSpecs = useMemo(
+    () => (selectedDeviceProduct ? extractTechnicalSpecs(selectedDeviceProduct) : []),
+    [selectedDeviceProduct],
+  );
+
+  const selectedDeviceTelemetryHighlights = useMemo(
+    () => getTelemetryHighlights(selectedTelemetryReading),
+    [selectedTelemetryReading],
   );
 
   const watchlistDevices = useMemo(() => {
@@ -250,6 +373,24 @@ export function RuntimeShell({
     worstZone,
     activeAlerts,
     activeFaults: activeFaults.length,
+  });
+
+  const handleZoneSelection = useEffectEvent((zoneId: string) => {
+    setSelectedZoneId(zoneId);
+    setSelectedDeviceId(null);
+    setIsRightDrawerOpen(true);
+  });
+
+  const handleDeviceSelection = useEffectEvent((deviceId: string) => {
+    const device = deviceById.get(deviceId) ?? null;
+    const servedZoneId = device?.served_space_ids[0] ?? null;
+
+    if (servedZoneId) {
+      setSelectedZoneId(servedZoneId);
+    }
+
+    setSelectedDeviceId(deviceId);
+    setIsRightDrawerOpen(true);
   });
 
   const handleSocketMessage = useEffectEvent((message: RuntimeSocketMessage) => {
@@ -753,7 +894,8 @@ export function RuntimeShell({
                 sandbox={deferredRuntime.sandbox}
                 selectedZoneId={selectedZoneId}
                 worstZoneId={deferredRuntime.twin?.summary.worstZoneId ?? null}
-                onSelectZone={setSelectedZoneId}
+                onSelectZone={handleZoneSelection}
+                onSelectDevice={handleDeviceSelection}
                 totalAirflowM3H={totalAirflow}
                 sourcePowerKw={sourcePower}
                 onReturnToPortfolio={onReturnToPortfolio}
@@ -795,17 +937,15 @@ export function RuntimeShell({
                 <SectionEyebrow label="Device Watchlist" />
                 <div className="mt-4 space-y-3">
                   {watchlistDevices.map((device) => (
-                    <WatchlistRow key={device.deviceId} device={device} />
+                    <WatchlistRow
+                      key={device.deviceId}
+                      device={device}
+                      onSelect={() => handleDeviceSelection(device.deviceId)}
+                    />
                   ))}
                 </div>
               </CardBlock>
             </div>
-
-            <InventoryPanel
-              blueprint={initial.blueprint}
-              products={initial.products}
-              sandbox={deferredRuntime.sandbox}
-            />
           </section>
 
           <aside
@@ -814,62 +954,174 @@ export function RuntimeShell({
             }`}
             aria-hidden={!isRightDrawerOpen}
           >
-            <CardBlock>
-              <SectionEyebrow label="Selected Zone" />
-              <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-slate-950">
-                {selectedSpace?.name ?? "No selection"}
-              </h2>
-              {selectedZone ? (
-                <>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <DetailPill label="Temperature" value={`${selectedZone.temperatureC.toFixed(1)}°C`} />
-                    <DetailPill label="Humidity" value={`${selectedZone.relativeHumidityPct.toFixed(0)}%`} />
-                    <DetailPill label="CO₂" value={`${selectedZone.co2Ppm.toFixed(0)} ppm`} />
-                    <DetailPill label="Airflow" value={`${selectedZone.supplyAirflowM3H.toFixed(0)} m³/h`} />
-                    <DetailPill label="Occupancy" value={`${selectedZone.occupancyCount}`} />
-                    <DetailPill label="Comfort" value={`${selectedZone.comfortScore.toFixed(0)}%`} />
-                  </div>
-                  <p className="mt-4 text-sm leading-6 text-slate-600">
-                    Target comfort band {selectedSpace?.comfort_targets.occupied_temperature_band_c[0].toFixed(1)} to{" "}
-                    {selectedSpace?.comfort_targets.occupied_temperature_band_c[1].toFixed(1)}°C, CO₂ ceiling{" "}
-                    {selectedSpace?.comfort_targets.co2_limit_ppm.toFixed(0)} ppm.
-                  </p>
-                </>
-              ) : (
-                <p className="mt-4 text-sm text-slate-500">Select a room in the scene to inspect it.</p>
-              )}
-            </CardBlock>
-
-            <CardBlock>
-              <SectionEyebrow label="Diagnostics" />
-              <div className="mt-4 space-y-3">
-                {selectedZoneAlertDevices.length === 0 ? (
-                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                    Selected zone is nominal. No actuator or sensor in the zone is raising a twin alert.
-                  </div>
-                ) : (
-                  selectedZoneAlertDevices.map((device) => (
-                    <div key={device.deviceId} className="rounded-2xl border border-slate-200/70 bg-white/75 p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-medium text-slate-900">{device.deviceId}</p>
-                        <span className="rounded-full bg-slate-950 px-2 py-1 text-[11px] font-medium text-white">
-                          {device.healthScore}%
-                        </span>
-                      </div>
-                      <p className="mt-2 text-sm text-slate-600">{device.alerts[0] ?? "Degraded but not alarming."}</p>
+            {selectedDevice && selectedDeviceProduct ? (
+              <>
+                <CardBlock>
+                  <SectionEyebrow label="Selected Component" />
+                  <div className="mt-3 flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-2xl font-semibold tracking-[-0.03em] text-slate-950">{selectedDevice.id}</h2>
+                      <p className="mt-2 text-sm leading-6 text-slate-600">
+                        {selectedDeviceProduct.brand} {getDeviceDisplayName(selectedDeviceProduct)}
+                      </p>
                     </div>
-                  ))
-                )}
-              </div>
-              <div className="mt-5 grid gap-2">
-                {selectedZoneDevices.map((device) => (
-                  <div key={`${device.deviceId}-asset`} className="flex items-center justify-between rounded-2xl bg-slate-100/70 px-3 py-2">
-                    <p className="text-sm text-slate-700">{device.deviceId}</p>
-                    <span className="text-xs font-medium text-slate-500">{device.productId}</span>
+                    <span className="rounded-full bg-[#d9691f]/12 px-3 py-2 text-[11px] font-medium uppercase tracking-[0.22em] text-[#b94f12]">
+                      {formatDeviceKind(selectedDevice.kind)}
+                    </span>
                   </div>
-                ))}
-              </div>
-            </CardBlock>
+
+                  <div className="mt-4">
+                    <ProductModelPreview
+                      product={selectedDeviceProduct}
+                      device={selectedDevice}
+                      telemetry={selectedTelemetryReading?.telemetry ?? null}
+                    />
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <DetailPill label="Placement" value={formatLabel(selectedDevice.placement)} />
+                    <DetailPill
+                      label="Serves"
+                      value={selectedDeviceSpaces.map((space) => space.name).join(" / ") || "Building-wide"}
+                    />
+                    <DetailPill
+                      label="Health"
+                      value={selectedDeviceDiagnosis ? `${selectedDeviceDiagnosis.healthScore}%` : "--"}
+                    />
+                    <DetailPill
+                      label="Observed"
+                      value={
+                        selectedTelemetryReading
+                          ? new Date(selectedTelemetryReading.observedAt).toLocaleTimeString("en-CH", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              second: "2-digit",
+                            })
+                          : "--"
+                      }
+                    />
+                  </div>
+                </CardBlock>
+
+                <CardBlock>
+                  <div className="flex items-center justify-between gap-3">
+                    <SectionEyebrow label="Component Details" />
+                    <span
+                      className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                        selectedDeviceDiagnosis?.alerts.length
+                          ? "bg-rose-500/15 text-rose-700"
+                          : "bg-emerald-500/15 text-emerald-700"
+                      }`}
+                    >
+                      {selectedDeviceDiagnosis?.alerts.length ? `${selectedDeviceDiagnosis.alerts.length} alerts` : "Nominal"}
+                    </span>
+                  </div>
+
+                  {selectedDeviceDiagnosis?.alerts.length ? (
+                    <div className="mt-4 space-y-3">
+                      {selectedDeviceDiagnosis.alerts.slice(0, 3).map((alert) => (
+                        <div key={alert} className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                          {alert}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                      No active diagnostics are escalating for this component.
+                    </div>
+                  )}
+
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                    {selectedDeviceTelemetryHighlights.length > 0 ? (
+                      selectedDeviceTelemetryHighlights.map((item) => (
+                        <DetailPill key={item.label} label={item.label} value={item.value} />
+                      ))
+                    ) : (
+                      <div className="rounded-2xl border border-slate-200/70 bg-white/75 px-4 py-3 text-sm text-slate-500 sm:col-span-2">
+                        No live telemetry is currently available for this component.
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedDeviceTechnicalSpecs.length > 0 ? (
+                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                      {selectedDeviceTechnicalSpecs.map((spec) => (
+                        <DetailPill key={spec.label} label={spec.label} value={spec.value} />
+                      ))}
+                    </div>
+                  ) : null}
+                </CardBlock>
+              </>
+            ) : (
+              <>
+                <CardBlock>
+                  <SectionEyebrow label="Selected Zone" />
+                  <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-slate-950">
+                    {selectedSpace?.name ?? "No selection"}
+                  </h2>
+                  {selectedZone ? (
+                    <>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        <DetailPill label="Temperature" value={`${selectedZone.temperatureC.toFixed(1)}°C`} />
+                        <DetailPill label="Humidity" value={`${selectedZone.relativeHumidityPct.toFixed(0)}%`} />
+                        <DetailPill label="CO₂" value={`${selectedZone.co2Ppm.toFixed(0)} ppm`} />
+                        <DetailPill label="Airflow" value={`${selectedZone.supplyAirflowM3H.toFixed(0)} m³/h`} />
+                        <DetailPill label="Occupancy" value={`${selectedZone.occupancyCount}`} />
+                        <DetailPill label="Comfort" value={`${selectedZone.comfortScore.toFixed(0)}%`} />
+                      </div>
+                      <p className="mt-4 text-sm leading-6 text-slate-600">
+                        Target comfort band {selectedSpace?.comfort_targets.occupied_temperature_band_c[0].toFixed(1)} to{" "}
+                        {selectedSpace?.comfort_targets.occupied_temperature_band_c[1].toFixed(1)}°C, CO₂ ceiling{" "}
+                        {selectedSpace?.comfort_targets.co2_limit_ppm.toFixed(0)} ppm.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="mt-4 text-sm text-slate-500">Select a room in the scene to inspect it.</p>
+                  )}
+                </CardBlock>
+
+                <CardBlock>
+                  <SectionEyebrow label="Diagnostics" />
+                  <div className="mt-4 space-y-3">
+                    {selectedZoneAlertDevices.length === 0 ? (
+                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                        Selected zone is nominal. No actuator or sensor in the zone is raising a twin alert.
+                      </div>
+                    ) : (
+                      selectedZoneAlertDevices.map((device) => (
+                        <button
+                          key={device.deviceId}
+                          type="button"
+                          onClick={() => handleDeviceSelection(device.deviceId)}
+                          className="w-full rounded-2xl border border-slate-200/70 bg-white/75 p-3 text-left transition hover:border-slate-300 hover:bg-white"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-medium text-slate-900">{device.deviceId}</p>
+                            <span className="rounded-full bg-slate-950 px-2 py-1 text-[11px] font-medium text-white">
+                              {device.healthScore}%
+                            </span>
+                          </div>
+                          <p className="mt-2 text-sm text-slate-600">{device.alerts[0] ?? "Degraded but not alarming."}</p>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  <div className="mt-5 grid gap-2">
+                    {selectedZoneDevices.map((device) => (
+                      <button
+                        key={`${device.deviceId}-asset`}
+                        type="button"
+                        onClick={() => handleDeviceSelection(device.deviceId)}
+                        className="flex items-center justify-between rounded-2xl bg-slate-100/70 px-3 py-2 text-left transition hover:bg-slate-100"
+                      >
+                        <p className="text-sm text-slate-700">{device.deviceId}</p>
+                        <span className="text-xs font-medium text-slate-500">{device.productId}</span>
+                      </button>
+                    ))}
+                  </div>
+                </CardBlock>
+              </>
+            )}
 
             <CardBlock>
               <SectionEyebrow label="Belimo Brain Control Plan" />
@@ -1113,9 +1365,13 @@ function InsightCard({
   );
 }
 
-function WatchlistRow({ device }: { device: DeviceDiagnosis }) {
+function WatchlistRow({ device, onSelect }: { device: DeviceDiagnosis; onSelect?: () => void }) {
   return (
-    <div className="rounded-[1.2rem] border border-slate-200/70 bg-white/75 px-4 py-3">
+    <button
+      type="button"
+      onClick={onSelect}
+      className="w-full rounded-[1.2rem] border border-slate-200/70 bg-white/75 px-4 py-3 text-left transition hover:border-slate-300 hover:bg-white"
+    >
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-sm font-medium text-slate-900">{device.deviceId}</p>
@@ -1134,7 +1390,7 @@ function WatchlistRow({ device }: { device: DeviceDiagnosis }) {
         </span>
       </div>
       <p className="mt-2 text-sm text-slate-600">{device.alerts[0] ?? "No active alert. Device is simply the weakest link right now."}</p>
-    </div>
+    </button>
   );
 }
 
