@@ -26,6 +26,15 @@ export function deriveWebSocketUrl(apiBaseUrl: string) {
   throw new Error(`Unsupported API_BASE_URL protocol in ${apiBaseUrl}`);
 }
 
+function deriveWebSocketUrlFromPath(apiBaseUrl: string, websocketPath: string) {
+  if (/^wss?:\/\//.test(websocketPath)) {
+    return trimTrailingSlash(websocketPath);
+  }
+
+  const normalizedPath = websocketPath.startsWith("/") ? websocketPath : `/${websocketPath}`;
+  return `${deriveWebSocketUrl(apiBaseUrl)}${normalizedPath === "/ws" ? "" : normalizedPath.replace(/\/ws$/, "")}`;
+}
+
 export async function fetchRuntimeBootstrap() {
   const apiBaseUrl = getApiBaseUrl();
   const response = await fetch(`${apiBaseUrl}/api/runtime/bootstrap`, {
@@ -39,6 +48,7 @@ export async function fetchRuntimeBootstrap() {
   const payload = (await response.json()) as {
     ok: boolean;
     payload: RuntimeBootstrapPayload;
+    websocketPath?: string;
   };
 
   if (!payload.ok) {
@@ -48,6 +58,8 @@ export async function fetchRuntimeBootstrap() {
   return {
     bootstrap: payload.payload,
     apiBaseUrl,
-    websocketUrl: deriveWebSocketUrl(apiBaseUrl),
+    websocketUrl: payload.websocketPath
+      ? deriveWebSocketUrlFromPath(apiBaseUrl, payload.websocketPath)
+      : deriveWebSocketUrl(apiBaseUrl),
   };
 }
