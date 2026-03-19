@@ -35,6 +35,7 @@ type RuntimeSceneProps = {
 type RuntimeSceneContentProps = RuntimeSceneProps & {
   autoRotateActive: boolean;
   controlsRef: { current: import("three-stdlib").OrbitControls | null };
+  onHoverStateChange: (hovered: boolean) => void;
 };
 
 type RoomBadgeProps = {
@@ -116,32 +117,32 @@ function RoomBadge({ zone, label, isSelected, isWorstZone, onPointerEnter, onPoi
     <div
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
-      className={`rounded-2xl border px-3 py-2 shadow-[0_16px_36px_rgba(15,23,42,0.16)] backdrop-blur ${
-        isSelected ? "min-w-[152px] border-white/75 bg-white/92" : "min-w-[118px] border-white/48 bg-white/82"
+      className={`rounded-[1.15rem] border px-2.5 py-2 shadow-[0_14px_30px_rgba(15,23,42,0.14)] backdrop-blur ${
+        isSelected ? "min-w-[140px] border-white/75 bg-white/92" : "min-w-[108px] border-white/48 bg-white/82"
       }`}
     >
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">{label}</p>
+        <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">{label}</p>
         <span className="flex items-center gap-2">
           {isWorstZone ? (
-            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+            <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-700">
               focus
             </span>
           ) : null}
-          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: getZoneTone(zone) }} />
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: getZoneTone(zone) }} />
         </span>
       </div>
       <div className="mt-2 flex items-end justify-between gap-4">
         <div>
-          <p className="text-xl font-semibold leading-none text-slate-950">
+          <p className="text-lg font-semibold leading-none text-slate-950">
             {zone ? `${zone.temperatureC.toFixed(1)} deg` : "--"}
           </p>
           {isSelected ? (
-            <p className="mt-1 text-xs text-slate-600">
+            <p className="mt-1 text-[11px] text-slate-600">
               {zone ? `${zone.co2Ppm.toFixed(0)} ppm | ${zone.supplyAirflowM3H.toFixed(0)} m3/h` : "No data"}
             </p>
           ) : (
-            <p className="mt-1 text-xs text-slate-600">
+            <p className="mt-1 text-[11px] text-slate-600">
               {zone ? `${zone.comfortScore.toFixed(0)}% comfort` : "No data"}
             </p>
           )}
@@ -354,38 +355,55 @@ function formatTelemetryValue(key: string, value: number | string | boolean | nu
   return `${value.toFixed(1)}`;
 }
 
-function getTelemetryHighlights(telemetry: DeviceTelemetryRecord["telemetry"] | null) {
-  if (!telemetry) {
-    return [];
+function getDeviceHoverSummary(
+  device: DeviceDefinition,
+  product: ProductDefinition,
+  telemetry: DeviceTelemetryRecord["telemetry"] | null,
+) {
+  if (device.kind === "actuator") {
+    const percentageKeys = ["damper_position_pct", "actuator_position_pct", "position_pct", "opening_pct"];
+
+    for (const key of percentageKeys) {
+      const value = telemetry?.[key];
+
+      if (typeof value === "number") {
+        return {
+          title: "Actuator",
+          subtitle: `${product.brand} actuator air damper`,
+          detail: `Damper opening ${value.toFixed(0)}%`,
+        };
+      }
+    }
+
+    return {
+      title: "Actuator",
+      subtitle: `${product.brand} actuator air damper`,
+      detail: "Damper opening unavailable",
+    };
   }
 
-  const preferredKeys = [
-    "electrical_power_kw",
-    "damper_position_pct",
-    "actuator_position_pct",
-    "air_flow_m3_h",
-    "airflow_m3_h",
-    "temperature_c",
-    "co2_ppm",
-    "relative_humidity_pct",
-    "static_pressure_pa",
-    "operating_mode",
-  ];
+  if (device.kind === "sensor") {
+    const sensorReading =
+      Object.entries(telemetry ?? {}).find((entry) => entry[0].includes("temperature")) ??
+      Object.entries(telemetry ?? {}).find((entry) => entry[0].includes("pressure")) ??
+      Object.entries(telemetry ?? {}).find((entry) => entry[0].includes("humidity")) ??
+      Object.entries(telemetry ?? {}).find((entry) => entry[0].includes("co2")) ??
+      null;
 
-  const entries = preferredKeys
-    .map((key) => [key, telemetry[key]] as const)
-    .filter((entry): entry is [string, number | string | boolean] => entry[1] !== undefined && entry[1] !== null)
-    .slice(0, 2);
-
-  if (entries.length > 0) {
-    return entries.map(([key, value]) => formatTelemetryValue(key, value)).filter((value): value is string => Boolean(value));
+    return {
+      title: "Sensor",
+      subtitle: `${product.brand} field sensor`,
+      detail: sensorReading ? `${sensorReading[0].replaceAll("_", " ")} ${formatTelemetryValue(sensorReading[0], sensorReading[1])}` : "Live reading unavailable",
+    };
   }
 
-  return Object.entries(telemetry)
-    .filter((entry): entry is [string, number | string | boolean] => entry[1] !== undefined && entry[1] !== null)
-    .slice(0, 2)
-    .map(([key, value]) => formatTelemetryValue(key, value))
-    .filter((value): value is string => Boolean(value));
+  const power = telemetry?.electrical_power_kw;
+
+  return {
+    title: "Unit",
+    subtitle: `${product.brand} runtime source`,
+    detail: typeof power === "number" ? `Power draw ${power.toFixed(1)} kW` : "Runtime telemetry linked",
+  };
 }
 
 function DeviceHoverCard({
@@ -396,8 +414,7 @@ function DeviceHoverCard({
   onPointerEnter,
   onPointerLeave,
 }: DeviceHoverCardProps) {
-  const highlights = getTelemetryHighlights(telemetry);
-  const alertText = diagnosis?.alerts[0] ?? null;
+  const summary = getDeviceHoverSummary(device, product, telemetry);
   const statusTone = diagnosis
     ? diagnosis.healthScore >= 95
       ? "#16a34a"
@@ -410,24 +427,16 @@ function DeviceHoverCard({
     <div
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
-      className="min-w-[188px] rounded-2xl border border-white/75 bg-white/94 px-3 py-2 shadow-[0_18px_42px_rgba(15,23,42,0.18)] backdrop-blur"
+      className="min-w-[156px] rounded-[1.15rem] border border-white/80 bg-white/95 px-2.5 py-2 shadow-[0_14px_28px_rgba(15,23,42,0.16)] backdrop-blur"
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">{device.id}</p>
-          <p className="mt-1 text-sm font-semibold text-slate-950">
-            {product.brand} {product.subtype.replaceAll("_", " ")}
-          </p>
+          <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-slate-500">{summary.title}</p>
+          <p className="mt-1 text-[13px] font-semibold text-slate-950">{summary.subtitle}</p>
         </div>
-        <span className="mt-0.5 h-2.5 w-2.5 rounded-full" style={{ backgroundColor: statusTone }} />
+        <span className="mt-0.5 h-2 w-2 rounded-full" style={{ backgroundColor: statusTone }} />
       </div>
-      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">{device.kind.replaceAll("_", " ")}</p>
-      {highlights.length > 0 ? (
-        <p className="mt-2 text-sm font-medium text-slate-700">{highlights.join(" | ")}</p>
-      ) : null}
-      <p className="mt-2 text-xs text-slate-600">
-        {alertText ?? (diagnosis ? `Health ${diagnosis.healthScore}%` : device.placement)}
-      </p>
+      <p className="mt-2 text-[12px] text-slate-700">{summary.detail}</p>
     </div>
   );
 }
@@ -528,7 +537,7 @@ function DeviceHealthIndicator({
         </mesh>
       ) : null}
       {isCritical ? (
-        <Html position={[position[0], position[1] + 0.55, position[2]]} transform distanceFactor={10}>
+        <Html position={[position[0], position[1] + 0.55, position[2]]} transform occlude distanceFactor={10}>
           <div className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[11px] font-bold text-white shadow-lg">
             !
           </div>
@@ -567,6 +576,7 @@ function RuntimeSceneContent({
   onSelectZone,
   autoRotateActive,
   controlsRef,
+  onHoverStateChange,
 }: RuntimeSceneContentProps) {
   const [hoveredZoneId, setHoveredZoneId] = useState<string | null>(null);
   const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null);
@@ -665,6 +675,10 @@ function RuntimeSceneContent({
       cancelDeviceHoverClose();
     };
   }, []);
+
+  useEffect(() => {
+    onHoverStateChange(hoveredZoneId !== null || hoveredDeviceId !== null);
+  }, [hoveredDeviceId, hoveredZoneId, onHoverStateChange]);
 
   return (
     <>
@@ -965,24 +979,10 @@ function RuntimeSceneContent({
           );
         })}
 
-        <Html position={[sourcePoint.x, sourcePoint.y + 0.95, sourcePoint.z]} transform distanceFactor={12}>
-          <div className="rounded-full border border-white/70 bg-white/92 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-800 shadow-[0_10px_24px_rgba(15,23,42,0.12)]">
-            RTU-1
-          </div>
-        </Html>
-        <Html position={[sourcePoint.x, sourcePoint.y + 0.6, sourcePoint.z + 1.1]} transform distanceFactor={12}>
-          <div className="rounded-full border border-white/60 bg-white/88 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500 shadow-[0_8px_18px_rgba(15,23,42,0.08)]">
-            {formatZoneToneLabel(mode)}
-          </div>
-        </Html>
         </group>
       </group>
     </>
   );
-}
-
-function formatZoneToneLabel(mode: string) {
-  return mode.replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function AirflowIcon() {
@@ -1032,6 +1032,8 @@ function PowerIcon() {
 export function RuntimeScene(props: RuntimeSceneProps) {
   const controlsRef = useRef<import("three-stdlib").OrbitControls | null>(null);
   const [isSceneHovered, setIsSceneHovered] = useState(false);
+  const [hasActiveHoverCard, setHasActiveHoverCard] = useState(false);
+  const shouldPauseRotation = isSceneHovered || hasActiveHoverCard;
 
   return (
     <div
@@ -1090,7 +1092,12 @@ export function RuntimeScene(props: RuntimeSceneProps) {
         dpr={1}
         gl={{ antialias: false, powerPreference: "high-performance" }}
       >
-        <RuntimeSceneContent {...props} autoRotateActive={!isSceneHovered} controlsRef={controlsRef} />
+        <RuntimeSceneContent
+          {...props}
+          autoRotateActive={!shouldPauseRotation}
+          controlsRef={controlsRef}
+          onHoverStateChange={setHasActiveHoverCard}
+        />
       </Canvas>
     </div>
   );
