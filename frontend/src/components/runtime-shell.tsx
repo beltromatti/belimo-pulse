@@ -160,12 +160,25 @@ function getTelemetryHighlights(reading: DeviceTelemetryRecord | null) {
   }
 
   return Object.entries(reading.telemetry)
-    .filter(([, value]) => typeof value === "number" || typeof value === "string")
-    .slice(0, 4)
-    .map(([key, value]) => ({
-      label: formatLabel(key),
-      value: typeof value === "number" ? value.toFixed(Number.isInteger(value) ? 0 : 1) : value,
-    }));
+    .map(([key, value]) => {
+      if (typeof value === "number") {
+        return {
+          label: formatLabel(key),
+          value: value.toFixed(Number.isInteger(value) ? 0 : 1),
+        };
+      }
+
+      if (typeof value === "string") {
+        return {
+          label: formatLabel(key),
+          value,
+        };
+      }
+
+      return null;
+    })
+    .filter((entry): entry is { label: string; value: string } => entry !== null)
+    .slice(0, 4);
 }
 
 function formatDeviceKind(kind: DeviceDefinition["kind"]) {
@@ -350,7 +363,7 @@ export function RuntimeShell({
         (
           entry,
         ): entry is {
-          device: (typeof initial.blueprint.devices)[number];
+          device: DeviceDefinition;
           product: ProductDefinition;
           diagnosis: DeviceDiagnosis | null;
         } => entry.product !== null,
@@ -411,14 +424,14 @@ export function RuntimeShell({
     activeFaults: activeFaults.length,
   });
 
-  const handleZoneSelection = useEffectEvent((zoneId: string) => {
+  function handleZoneSelection(zoneId: string) {
     setSelectedZoneId(zoneId);
     setSelectedDeviceId(null);
     setInspectView("zone");
     setIsRightDrawerOpen(true);
-  });
+  }
 
-  const handleDeviceSelection = useEffectEvent((deviceId: string) => {
+  function handleDeviceSelection(deviceId: string) {
     const device = deviceById.get(deviceId) ?? null;
     const servedZoneId = device?.served_space_ids[0] ?? null;
 
@@ -429,9 +442,9 @@ export function RuntimeShell({
     setSelectedDeviceId(deviceId);
     setInspectView("device");
     setIsRightDrawerOpen(true);
-  });
+  }
 
-  const handleInspectDrawerToggle = useEffectEvent(() => {
+  function handleInspectDrawerToggle() {
     setIsRightDrawerOpen((current) => {
       const next = !current;
 
@@ -441,7 +454,7 @@ export function RuntimeShell({
 
       return next;
     });
-  });
+  }
 
   const handleSocketMessage = useEffectEvent((message: RuntimeSocketMessage) => {
     if (message.type === "hello") {
@@ -957,11 +970,7 @@ export function RuntimeShell({
               />
             </div>
 
-            <div
-              className={`grid gap-4 transition-[margin] duration-300 ${
-                isLeftDrawerOpen ? "xl:ml-[23rem]" : ""
-              } ${isRightDrawerOpen ? "xl:mr-[23rem]" : ""} lg:grid-cols-[1.15fr_0.85fr]`}
-            >
+            <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
               <CardBlock>
                 <div className="flex items-center justify-between">
                   <SectionEyebrow label="Operational Story" />

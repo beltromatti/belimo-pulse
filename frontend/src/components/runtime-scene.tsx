@@ -1046,8 +1046,6 @@ export function RuntimeScene(props: RuntimeSceneProps) {
   const [isSceneHovered, setIsSceneHovered] = useState(false);
   const [hasActiveHoverCard, setHasActiveHoverCard] = useState(false);
   const shouldPauseRotation = isSceneHovered || hasActiveHoverCard;
-  const drawerOffset = "calc(1rem + min(23rem, calc(100vw - 1.5rem)) + 0.9rem)";
-  const compactHeader = props.leftDrawerOpen || props.rightDrawerOpen;
 
   return (
     <div
@@ -1056,26 +1054,12 @@ export function RuntimeScene(props: RuntimeSceneProps) {
       onPointerLeave={() => setIsSceneHovered(false)}
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-32 bg-gradient-to-b from-white/55 to-transparent" />
-      <div
-        className="pointer-events-none absolute top-4 z-10 transition-[left,right] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] sm:top-5"
-        style={{
-          left: props.leftDrawerOpen ? drawerOffset : "1rem",
-          right: props.rightDrawerOpen ? drawerOffset : "1rem",
-        }}
-      >
-        <div
-          className={`flex flex-wrap items-center justify-between rounded-full border border-white/55 bg-white/62 text-slate-600 backdrop-blur transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-            compactHeader ? "gap-2 px-3 py-2.5" : "gap-3 px-4 py-3"
-          }`}
-        >
+      <div className="pointer-events-none absolute inset-x-4 top-4 z-10 sm:inset-x-6 sm:top-5">
+        <div className="relative flex flex-wrap items-center justify-between gap-3 rounded-full border border-white/55 bg-white/62 px-4 py-3 text-slate-600 backdrop-blur">
           <div className="pointer-events-auto flex items-center gap-3">
-            <BrandLockup className={compactHeader ? "scale-[0.94]" : ""} />
+            <BrandLockup />
           </div>
-          <div
-            className={`pointer-events-none absolute inset-x-0 top-1/2 hidden -translate-y-1/2 justify-center transition-opacity duration-300 lg:flex ${
-              compactHeader ? "opacity-0" : "opacity-100"
-            }`}
-          >
+          <div className="pointer-events-none absolute inset-x-0 top-1/2 hidden -translate-y-1/2 justify-center lg:flex">
             <div className="pointer-events-auto inline-flex items-center gap-3 px-3 py-2">
               <span className="text-sm font-medium tracking-[-0.02em] text-slate-800">
                 {props.blueprint.building.name}
@@ -1091,26 +1075,26 @@ export function RuntimeScene(props: RuntimeSceneProps) {
               ) : null}
             </div>
           </div>
-          <div className={`flex flex-wrap items-center justify-end text-slate-950 ${compactHeader ? "gap-2.5" : "gap-3"}`}>
+          <div className="flex flex-wrap items-center justify-end gap-3 text-slate-950">
             <div
-              className={`flex items-center ${compactHeader ? "gap-1.5" : "gap-2"}`}
+              className="flex items-center gap-2"
               aria-label={`Total air flow ${props.totalAirflowM3H.toFixed(0)} cubic meters per hour`}
             >
               <AirflowIcon />
-              <span className={`font-semibold tracking-[-0.03em] ${compactHeader ? "text-sm sm:text-[15px]" : "text-base"}`}>
+              <span className="text-base font-semibold tracking-[-0.03em]">
                 {props.totalAirflowM3H.toFixed(0)}{" "}
-                <span className={`${compactHeader ? "text-[11px]" : "text-sm"} font-medium text-slate-500`}>m3/h</span>
+                <span className="text-sm font-medium text-slate-500">m3/h</span>
               </span>
             </div>
-            <span className={`${compactHeader ? "h-6" : "h-7"} w-px bg-slate-300/80`} aria-hidden="true" />
+            <span className="h-7 w-px bg-slate-300/80" aria-hidden="true" />
             <div
-              className={`flex items-center ${compactHeader ? "gap-1.5" : "gap-2"}`}
+              className="flex items-center gap-2"
               aria-label={`Energy draw ${props.sourcePowerKw.toFixed(1)} kilowatts`}
             >
               <PowerIcon />
-              <span className={`font-semibold tracking-[-0.03em] ${compactHeader ? "text-sm sm:text-[15px]" : "text-base"}`}>
+              <span className="text-base font-semibold tracking-[-0.03em]">
                 {props.sourcePowerKw.toFixed(1)}{" "}
-                <span className={`${compactHeader ? "text-[11px]" : "text-sm"} font-medium text-slate-500`}>kW</span>
+                <span className="text-sm font-medium text-slate-500">kW</span>
               </span>
             </div>
           </div>
