@@ -28,6 +28,7 @@ type RuntimeSceneProps = {
   leftDrawerOpen: boolean;
   rightDrawerOpen: boolean;
   selectedZoneId: string | null;
+  showSelectedZoneBadge: boolean;
   worstZoneId: string | null;
   onSelectZone: (zoneId: string) => void;
   onSelectDevice: (deviceId: string) => void;
@@ -1383,6 +1384,7 @@ function RuntimeSceneContent({
   twin,
   sandbox,
   selectedZoneId,
+  showSelectedZoneBadge,
   worstZoneId,
   onSelectZone,
   onSelectDevice,
@@ -1674,7 +1676,7 @@ function RuntimeSceneContent({
                 intensity={Math.max(0.12, intensity * 0.7)}
               />
 
-              {visibleHoveredZoneId === space.id || selectedZoneId === space.id ? (
+              {visibleHoveredZoneId === space.id || (showSelectedZoneBadge && selectedZoneId === space.id) ? (
                 <FloatingRoomBadge
                   position={[center.x, 1.55, center.z]}
                   zone={zone}
@@ -1851,7 +1853,7 @@ export function RuntimeScene(props: RuntimeSceneProps) {
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-32 bg-gradient-to-b from-white/55 to-transparent" />
       <div className="pointer-events-none absolute inset-x-4 top-4 z-10 sm:inset-x-6 sm:top-5">
-        <div className="relative flex flex-wrap items-center justify-between gap-3 rounded-full border border-white/55 bg-white/62 px-4 py-3 text-slate-600 backdrop-blur">
+        <div className="relative flex flex-wrap items-center justify-between gap-3 rounded-full border border-slate-200/70 bg-slate-100/76 px-4 py-3 text-slate-600 shadow-[0_18px_42px_rgba(148,163,184,0.16)] backdrop-blur">
           <div className="pointer-events-auto flex items-center gap-3">
             <BrandLockup />
           </div>
@@ -1872,7 +1874,7 @@ export function RuntimeScene(props: RuntimeSceneProps) {
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3 text-slate-950">
-            <div className="flex items-center gap-3 rounded-full bg-white/55 px-3 py-1.5">
+            <div className="flex items-center gap-3 px-1 py-1">
               <span className="text-sm font-medium tracking-[-0.02em] text-slate-700">
                 {localTimeLabel}, {cityLabel}
               </span>

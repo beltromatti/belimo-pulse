@@ -1115,6 +1115,7 @@ export function RuntimeShell({
                 leftDrawerOpen={isLeftDrawerOpen}
                 rightDrawerOpen={isRightDrawerOpen}
                 selectedZoneId={selectedZoneId}
+                showSelectedZoneBadge={isRightDrawerOpen && inspectView === "zone"}
                 worstZoneId={deferredRuntime.twin?.summary.worstZoneId ?? null}
                 onSelectZone={handleZoneSelection}
                 onSelectDevice={handleDeviceSelection}
