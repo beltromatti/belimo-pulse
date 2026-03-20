@@ -37,6 +37,19 @@ Belimo Pulse can:
 - keep room targets stable even when weather, open windows, occupancy shifts, or faults disturb the system
 - persist raw telemetry, derived twin data, diagnoses, and runtime history for analysis
 
+## Belimo Assistant
+
+Belimo Assistant is the installer and commissioning layer of Belimo Pulse, built around real actuator testing rather than building-wide runtime control.
+
+It is designed to help technicians:
+
+- run guided actuator checks on physical Belimo hardware
+- detect configuration mistakes before handover
+- identify malfunctions from live telemetry and test sequences
+- support commissioning with AI-assisted diagnostics and recommended next actions
+
+This complements the main Belimo Pulse platform: the digital twin manages the building, while Belimo Assistant helps validate and troubleshoot the field devices that make that control loop possible.
+
 ## Stack
 
 - Frontend: Next.js, React, TypeScript, Tailwind CSS
@@ -48,5 +61,4 @@ Belimo Pulse can:
 
 - The main technical handoff is documented in [DELIVERY_TECHNICAL_SUMMARY.md](/Users/beltromatti/Desktop/belimo-pulse/DELIVERY_TECHNICAL_SUMMARY.md)
 - The delivered demo focuses on the end-to-end building runtime, digital twin, gateway, and control loop
-- Belimo Assistant is the installer-facing part of Belimo Pulse: an AI-supported diagnostic and commissioning tool that runs actuator tests, detects configuration errors, and helps identify malfunctions on real Belimo hardware
 - Belimo Brain is intentionally disabled in the final UI build
