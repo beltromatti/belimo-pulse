@@ -1556,7 +1556,7 @@ function RuntimeSceneContent({
         {blueprint.spaces.map((space) => {
           const center = getRoomCenter(space);
           const zone = twinZones.get(space.id);
-          const isSelected = selectedZoneId === space.id;
+          const isSelected = showSelectedZoneBadge && selectedZoneId === space.id;
           const branchDevice = blueprint.devices.find(
             (device) => device.kind === "actuator" && device.served_space_ids.includes(space.id),
           );
