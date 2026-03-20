@@ -39,6 +39,7 @@ type RuntimeSceneProps = {
 type RuntimeSceneContentProps = RuntimeSceneProps & {
   autoRotateActive: boolean;
   controlsRef: { current: import("three-stdlib").OrbitControls | null };
+  hoverResetToken: number;
   onHoverStateChange: (hovered: boolean) => void;
 };
 
@@ -47,8 +48,6 @@ type RoomBadgeProps = {
   label: string;
   isSelected: boolean;
   isWorstZone: boolean;
-  onPointerEnter?: () => void;
-  onPointerLeave?: () => void;
 };
 
 type DeviceHoverCardProps = {
@@ -56,11 +55,15 @@ type DeviceHoverCardProps = {
   product: ProductDefinition;
   diagnosis: DeviceDiagnosis | undefined;
   telemetry: DeviceTelemetryRecord["telemetry"] | null;
-  onPointerEnter?: () => void;
-  onPointerLeave?: () => void;
 };
 
 type FlowRouteProps = {
+  points: THREE.Vector3[];
+  color: string;
+  intensity: number;
+};
+
+type AirDeliveryFlowProps = {
   points: THREE.Vector3[];
   color: string;
   intensity: number;
@@ -82,6 +85,8 @@ const WINDOW_EDGE_CLEARANCE = 0.52;
 const WINDOW_PANEL_GAP = 0.28;
 const WINDOW_MIN_PANEL_WIDTH = 0.68;
 const WINDOW_MAX_PANEL_WIDTH = 1.45;
+const DEVICE_HOVER_ANCHOR_Y_OFFSET = 0.34;
+const DEVICE_HOVER_LIFT_PX = 2;
 const HORIZONTAL_WALL_COLOR = "#d8e0ea";
 const VERTICAL_WALL_COLOR = "#c6d0dc";
 const WINDOW_TINT_COLOR = "#d7efff";
@@ -445,6 +450,72 @@ function getDeviceScenePosition(device: DeviceDefinition) {
   return new THREE.Vector3(device.layout.position_m.x, device.layout.position_m.z, device.layout.position_m.y);
 }
 
+function getWallMountedDeviceTransform(
+  device: DeviceDefinition,
+  product: ProductDefinition,
+  blueprint: BuildingBlueprint,
+) {
+  const baseTransform = getDeviceModelTransform(device);
+
+  if (product.visualization?.mount_type !== "wall_surface" || device.served_space_ids.length === 0) {
+    return baseTransform;
+  }
+
+  const servedSpace = blueprint.spaces.find((space) => space.id === device.served_space_ids[0]);
+
+  if (!servedSpace) {
+    return baseTransform;
+  }
+
+  const x = device.layout.position_m.x;
+  const z = device.layout.position_m.y;
+  const xMin = servedSpace.layout.origin_m.x;
+  const xMax = xMin + servedSpace.layout.size_m.width;
+  const zMin = servedSpace.layout.origin_m.y;
+  const zMax = zMin + servedSpace.layout.size_m.depth;
+  const wallInset = 0.028;
+
+  const distances = [
+    { wall: "west", distance: Math.abs(x - xMin) },
+    { wall: "east", distance: Math.abs(xMax - x) },
+    { wall: "north", distance: Math.abs(z - zMin) },
+    { wall: "south", distance: Math.abs(zMax - z) },
+  ].sort((left, right) => left.distance - right.distance);
+
+  const nearestWall = distances[0]?.wall;
+  const baseYOffset = baseTransform.positionOffset[1];
+
+  if (nearestWall === "west") {
+    return {
+      ...baseTransform,
+      rotation: [0, Math.PI / 2, 0] as [number, number, number],
+      positionOffset: [wallInset, baseYOffset, 0] as [number, number, number],
+    };
+  }
+
+  if (nearestWall === "east") {
+    return {
+      ...baseTransform,
+      rotation: [0, -Math.PI / 2, 0] as [number, number, number],
+      positionOffset: [-wallInset, baseYOffset, 0] as [number, number, number],
+    };
+  }
+
+  if (nearestWall === "south") {
+    return {
+      ...baseTransform,
+      rotation: [0, Math.PI, 0] as [number, number, number],
+      positionOffset: [0, baseYOffset, -wallInset] as [number, number, number],
+    };
+  }
+
+  return {
+    ...baseTransform,
+    rotation: [0, 0, 0] as [number, number, number],
+    positionOffset: [0, baseYOffset, wallInset] as [number, number, number],
+  };
+}
+
 function getZoneTone(zone: ZoneTwinState | undefined) {
   if (!zone) {
     return "#cbd5e1";
@@ -477,12 +548,10 @@ function getSpaceColor(zone: ZoneTwinState | undefined) {
   return "#ebe7dd";
 }
 
-function RoomBadge({ zone, label, isSelected, isWorstZone, onPointerEnter, onPointerLeave }: RoomBadgeProps) {
+function RoomBadge({ zone, label, isSelected, isWorstZone }: RoomBadgeProps) {
   return (
     <div
-      onPointerEnter={onPointerEnter}
-      onPointerLeave={onPointerLeave}
-      className={`rounded-[1.15rem] border px-2.5 py-2 shadow-[0_14px_30px_rgba(15,23,42,0.14)] backdrop-blur ${
+      className={`pointer-events-none rounded-[1.15rem] border px-2.5 py-2 shadow-[0_14px_30px_rgba(15,23,42,0.14)] backdrop-blur ${
         isSelected ? "min-w-[140px] border-white/75 bg-white/92" : "min-w-[108px] border-white/48 bg-white/82"
       }`}
     >
@@ -500,7 +569,7 @@ function RoomBadge({ zone, label, isSelected, isWorstZone, onPointerEnter, onPoi
       <div className="mt-2 flex items-end justify-between gap-4">
         <div>
           <p className="text-lg font-semibold leading-none text-slate-950">
-            {zone ? `${zone.temperatureC.toFixed(1)} deg` : "--"}
+            {zone ? `${zone.temperatureC.toFixed(1)}°C` : "--"}
           </p>
           {isSelected ? (
             <p className="mt-1 text-[11px] text-slate-600">
@@ -523,16 +592,12 @@ function FloatingRoomBadge({
   label,
   isSelected,
   isWorstZone,
-  onPointerEnter,
-  onPointerLeave,
 }: {
   position: [number, number, number];
   zone: ZoneTwinState | undefined;
   label: string;
   isSelected: boolean;
   isWorstZone: boolean;
-  onPointerEnter?: () => void;
-  onPointerLeave?: () => void;
 }) {
   const groupRef = useRef<THREE.Group | null>(null);
   const baseY = position[1];
@@ -548,56 +613,280 @@ function FloatingRoomBadge({
 
   return (
     <group ref={groupRef} position={position}>
-      <Html transform sprite distanceFactor={11}>
+      <Html center style={{ pointerEvents: "none" }}>
         <RoomBadge
           zone={zone}
           label={label}
           isSelected={isSelected}
           isWorstZone={isWorstZone}
-          onPointerEnter={onPointerEnter}
-          onPointerLeave={onPointerLeave}
         />
       </Html>
     </group>
   );
 }
 
-function FlowRoute({ points, color, intensity }: FlowRouteProps) {
-  const curve = useMemo(() => new THREE.CatmullRomCurve3(points), [points]);
+type FlowPolylineSegment = {
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  length: number;
+};
+
+function buildFlowPolyline(points: THREE.Vector3[]) {
+  const normalizedPoints: THREE.Vector3[] = [];
+
+  for (const point of points) {
+    const lastPoint = normalizedPoints.at(-1);
+
+    if (!lastPoint || lastPoint.distanceTo(point) > 0.001) {
+      normalizedPoints.push(point.clone());
+    }
+  }
+
+  const segments: FlowPolylineSegment[] = [];
+  let totalLength = 0;
+
+  for (let index = 0; index < normalizedPoints.length - 1; index += 1) {
+    const from = normalizedPoints[index];
+    const to = normalizedPoints[index + 1];
+    const length = from.distanceTo(to);
+
+    if (length <= 0.001) {
+      continue;
+    }
+
+    segments.push({ from, to, length });
+    totalLength += length;
+  }
+
+  return { segments, totalLength };
+}
+
+function sampleFlowPolyline(segments: FlowPolylineSegment[], totalLength: number, distance: number) {
+  if (segments.length === 0 || totalLength <= 0) {
+    return new THREE.Vector3();
+  }
+
+  let remainingDistance = ((distance % totalLength) + totalLength) % totalLength;
+
+  for (const segment of segments) {
+    if (remainingDistance <= segment.length) {
+      const alpha = segment.length <= 0.001 ? 0 : remainingDistance / segment.length;
+      return segment.from.clone().lerp(segment.to, alpha);
+    }
+
+    remainingDistance -= segment.length;
+  }
+
+  return segments.at(-1)?.to.clone() ?? new THREE.Vector3();
+}
+
+function AirDeliveryFlow({ points, color, intensity }: AirDeliveryFlowProps) {
+  const polyline = useMemo(() => buildFlowPolyline(points), [points]);
   const particleRefs = useRef<Array<THREE.Mesh | null>>([]);
   const particles = useMemo(() => Array.from({ length: 5 }, (_, index) => index / 5), []);
+  const particleRadius = 0.024 + intensity * 0.012;
+  const source = points[0];
+  const dischargeTarget = points[1] ?? points[0];
+  const jetDirection = useMemo(
+    () => dischargeTarget.clone().sub(source).normalize(),
+    [dischargeTarget, source],
+  );
+  const jetLength = source.distanceTo(dischargeTarget);
+  const jetCenter = useMemo(() => source.clone().lerp(dischargeTarget, 0.5), [dischargeTarget, source]);
+  const jetQuaternion = useMemo(() => {
+    const quaternion = new THREE.Quaternion();
+    quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), jetDirection);
+    return quaternion;
+  }, [jetDirection]);
 
   useFrame(({ clock }) => {
+    if (polyline.totalLength <= 0) {
+      return;
+    }
+
     const time = clock.getElapsedTime();
     particleRefs.current.forEach((mesh, index) => {
       if (!mesh) {
         return;
       }
 
-      const progress = (particles[index] + time * (0.045 + intensity * 0.1)) % 1;
-      const point = curve.getPointAt(progress);
+      const distance = (particles[index] * polyline.totalLength + time * (0.34 + intensity * 0.32)) % polyline.totalLength;
+      const point = sampleFlowPolyline(polyline.segments, polyline.totalLength, distance);
       mesh.position.copy(point);
     });
   });
 
   return (
-    <group>
-      <mesh>
-        <tubeGeometry args={[curve, 60, 0.06 + intensity * 0.025, 10, false]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.2} transparent opacity={0.68} />
-      </mesh>
+    <group renderOrder={4}>
+      {jetLength > 0.05 ? (
+        <mesh position={jetCenter} quaternion={jetQuaternion} renderOrder={4}>
+          <cylinderGeometry args={[0.03, 0.11 + intensity * 0.04, Math.max(jetLength, 0.16), 18, 1, true]} />
+          <meshStandardMaterial
+            color={color}
+            emissive={color}
+            emissiveIntensity={1.25}
+            transparent
+            opacity={0.16}
+            depthWrite={false}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      ) : null}
       {particles.map((particle, index) => (
         <mesh
           key={`${particle}-${index}`}
           ref={(node) => {
             particleRefs.current[index] = node;
           }}
+          renderOrder={5}
         >
-          <sphereGeometry args={[0.07 + intensity * 0.025, 16, 16]} />
-          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.5} />
+          <sphereGeometry args={[particleRadius, 14, 14]} />
+          <meshStandardMaterial
+            color="#ffffff"
+            emissive={color}
+            emissiveIntensity={2.2}
+            transparent
+            opacity={0.78}
+            depthWrite={false}
+          />
         </mesh>
       ))}
     </group>
+  );
+}
+
+function FlowRoute({ points, color, intensity }: FlowRouteProps) {
+  const polyline = useMemo(() => buildFlowPolyline(points), [points]);
+  const particleRefs = useRef<Array<THREE.Mesh | null>>([]);
+  const particles = useMemo(() => Array.from({ length: 6 }, (_, index) => index / 6), []);
+  const coreThickness = 0.052 + intensity * 0.018;
+  const particleRadius = 0.032 + intensity * 0.015;
+
+  useFrame(({ clock }) => {
+    if (polyline.totalLength <= 0) {
+      return;
+    }
+
+    const time = clock.getElapsedTime();
+    particleRefs.current.forEach((mesh, index) => {
+      if (!mesh) {
+        return;
+      }
+
+      const distance = (particles[index] * polyline.totalLength + time * (0.52 + intensity * 0.7)) % polyline.totalLength;
+      const point = sampleFlowPolyline(polyline.segments, polyline.totalLength, distance);
+      mesh.position.copy(point);
+    });
+  });
+
+  return (
+    <group>
+      {polyline.segments.map((segment, index) => (
+        <FlowCoreSegment
+          key={`${segment.from.toArray().join(":")}-${segment.to.toArray().join(":")}-${index}`}
+          from={segment.from}
+          to={segment.to}
+          thickness={coreThickness}
+          color={color}
+        />
+      ))}
+      {particles.map((particle, index) => (
+        <mesh
+          key={`${particle}-${index}`}
+          ref={(node) => {
+            particleRefs.current[index] = node;
+          }}
+          renderOrder={5}
+        >
+          <sphereGeometry args={[particleRadius, 16, 16]} />
+          <meshStandardMaterial
+            color="#ffffff"
+            emissive={color}
+            emissiveIntensity={2.8}
+            transparent
+            opacity={0.96}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function FlowCoreSegment({
+  from,
+  to,
+  thickness,
+  color,
+}: {
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  thickness: number;
+  color: string;
+}) {
+  const dx = Math.abs(to.x - from.x);
+  const dy = Math.abs(to.y - from.y);
+  const dz = Math.abs(to.z - from.z);
+  const center = new THREE.Vector3((from.x + to.x) / 2, (from.y + to.y) / 2, (from.z + to.z) / 2);
+
+  if (dx >= dy && dx >= dz) {
+    return (
+      <RoundedBox
+        args={[Math.max(dx, 0.12), thickness, thickness]}
+        radius={0.02}
+        smoothness={3}
+        position={center}
+        renderOrder={4}
+      >
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={1.9}
+          transparent
+          opacity={0.78}
+          depthWrite={false}
+        />
+      </RoundedBox>
+    );
+  }
+
+  if (dz >= dx && dz >= dy) {
+    return (
+      <RoundedBox
+        args={[thickness, thickness, Math.max(dz, 0.12)]}
+        radius={0.02}
+        smoothness={3}
+        position={center}
+        renderOrder={4}
+      >
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={1.9}
+          transparent
+          opacity={0.78}
+          depthWrite={false}
+        />
+      </RoundedBox>
+    );
+  }
+
+  return (
+    <RoundedBox
+      args={[thickness, Math.max(dy, 0.12), thickness]}
+      radius={0.02}
+      smoothness={3}
+      position={center}
+      renderOrder={4}
+    >
+      <meshStandardMaterial
+        color={color}
+        emissive={color}
+        emissiveIntensity={1.9}
+        transparent
+        opacity={0.78}
+        depthWrite={false}
+      />
+    </RoundedBox>
   );
 }
 
@@ -619,23 +908,56 @@ function DuctSegment({
 
   if (dx >= dy && dx >= dz) {
     return (
-      <RoundedBox args={[Math.max(dx, 0.2), thickness, thickness]} radius={0.04} smoothness={3} position={center}>
-        <meshStandardMaterial color={color} metalness={0.38} roughness={0.4} />
+      <RoundedBox
+        args={[Math.max(dx, 0.2), thickness, thickness]}
+        radius={0.04}
+        smoothness={3}
+        position={center}
+        renderOrder={2}
+      >
+        <meshStandardMaterial
+          color={color}
+          metalness={0.38}
+          roughness={0.4}
+          transparent
+          opacity={0.6}
+          depthWrite={false}
+        />
       </RoundedBox>
     );
   }
 
   if (dz >= dx && dz >= dy) {
     return (
-      <RoundedBox args={[thickness, thickness, Math.max(dz, 0.2)]} radius={0.04} smoothness={3} position={center}>
-        <meshStandardMaterial color={color} metalness={0.38} roughness={0.4} />
+      <RoundedBox
+        args={[thickness, thickness, Math.max(dz, 0.2)]}
+        radius={0.04}
+        smoothness={3}
+        position={center}
+        renderOrder={2}
+      >
+        <meshStandardMaterial
+          color={color}
+          metalness={0.38}
+          roughness={0.4}
+          transparent
+          opacity={0.6}
+          depthWrite={false}
+        />
       </RoundedBox>
     );
   }
 
   return (
-    <RoundedBox args={[0.16, Math.max(dy, 0.2), 0.16]} radius={0.03} smoothness={3} position={center}>
-      <meshStandardMaterial color={color} metalness={0.18} roughness={0.5} />
+    <RoundedBox args={[0.16, Math.max(dy, 0.2), 0.16]} radius={0.03} smoothness={3} position={center} renderOrder={2}>
+      <meshStandardMaterial
+        color={color}
+        metalness={0.18}
+        roughness={0.5}
+        transparent
+        opacity={0.6}
+        depthWrite={false}
+      />
     </RoundedBox>
   );
 }
@@ -803,7 +1125,7 @@ function formatTelemetryValue(key: string, value: number | string | boolean | nu
   const normalizedKey = key.toLowerCase();
 
   if (normalizedKey.includes("temperature")) {
-    return `${value.toFixed(1)} deg`;
+    return `${value.toFixed(1)}°C`;
   }
 
   if (normalizedKey.includes("humidity")) {
@@ -903,8 +1225,6 @@ function DeviceHoverCard({
   product,
   diagnosis,
   telemetry,
-  onPointerEnter,
-  onPointerLeave,
 }: DeviceHoverCardProps) {
   const summary = getDeviceHoverSummary(device, product, telemetry);
   const statusTone = diagnosis
@@ -917,9 +1237,7 @@ function DeviceHoverCard({
 
   return (
     <div
-      onPointerEnter={onPointerEnter}
-      onPointerLeave={onPointerLeave}
-      className="relative min-w-[156px] rounded-[1.15rem] border border-white/80 bg-white/95 px-2.5 py-2 shadow-[0_14px_28px_rgba(15,23,42,0.16)] backdrop-blur"
+      className="pointer-events-none relative min-w-[156px] rounded-[1.15rem] border border-white/80 bg-white/95 px-2.5 py-2 shadow-[0_14px_28px_rgba(15,23,42,0.16)] backdrop-blur"
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -1030,7 +1348,7 @@ function DeviceHealthIndicator({
         </mesh>
       ) : null}
       {isCritical ? (
-        <Html position={[position[0], position[1] + 0.55, position[2]]} transform occlude distanceFactor={10}>
+        <Html position={[position[0], position[1] + 0.55, position[2]]} center occlude style={{ pointerEvents: "none" }}>
           <div className="pointer-events-none flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[11px] font-bold text-white shadow-lg">
             !
           </div>
@@ -1070,12 +1388,17 @@ function RuntimeSceneContent({
   onSelectDevice,
   autoRotateActive,
   controlsRef,
+  hoverResetToken,
   onHoverStateChange,
 }: RuntimeSceneContentProps) {
-  const [hoveredZoneId, setHoveredZoneId] = useState<string | null>(null);
-  const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null);
-  const roomHoverCloseRef = useRef<number | null>(null);
-  const deviceHoverCloseRef = useRef<number | null>(null);
+  const [hoveredZoneState, setHoveredZoneState] = useState<{ id: string | null; token: number }>({
+    id: null,
+    token: hoverResetToken,
+  });
+  const [hoveredDeviceState, setHoveredDeviceState] = useState<{ id: string | null; token: number }>({
+    id: null,
+    token: hoverResetToken,
+  });
   const twinZones = useMemo(() => new Map((twin?.zones ?? []).map((zone) => [zone.zoneId, zone])), [twin?.zones]);
   const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const telemetryByDeviceId = useMemo(
@@ -1128,36 +1451,6 @@ function RuntimeSceneContent({
     onSelectDevice(deviceId);
   };
 
-  const cancelRoomHoverClose = () => {
-    if (roomHoverCloseRef.current) {
-      window.clearTimeout(roomHoverCloseRef.current);
-      roomHoverCloseRef.current = null;
-    }
-  };
-
-  const scheduleRoomHoverClose = (zoneId: string) => {
-    cancelRoomHoverClose();
-    roomHoverCloseRef.current = window.setTimeout(() => {
-      setHoveredZoneId((current) => (current === zoneId ? null : current));
-      roomHoverCloseRef.current = null;
-    }, 140);
-  };
-
-  const cancelDeviceHoverClose = () => {
-    if (deviceHoverCloseRef.current) {
-      window.clearTimeout(deviceHoverCloseRef.current);
-      deviceHoverCloseRef.current = null;
-    }
-  };
-
-  const scheduleDeviceHoverClose = (deviceId: string) => {
-    cancelDeviceHoverClose();
-    deviceHoverCloseRef.current = window.setTimeout(() => {
-      setHoveredDeviceId((current) => (current === deviceId ? null : current));
-      deviceHoverCloseRef.current = null;
-    }, 140);
-  };
-
   useEffect(() => {
     const controls = controlsRef.current;
 
@@ -1169,16 +1462,12 @@ function RuntimeSceneContent({
     controls.update();
   }, [controlsRef, sceneCenter]);
 
-  useEffect(() => {
-    return () => {
-      cancelRoomHoverClose();
-      cancelDeviceHoverClose();
-    };
-  }, []);
+  const visibleHoveredZoneId = hoveredZoneState.token === hoverResetToken ? hoveredZoneState.id : null;
+  const visibleHoveredDeviceId = hoveredDeviceState.token === hoverResetToken ? hoveredDeviceState.id : null;
 
   useEffect(() => {
-    onHoverStateChange(hoveredZoneId !== null || hoveredDeviceId !== null);
-  }, [hoveredDeviceId, hoveredZoneId, onHoverStateChange]);
+    onHoverStateChange(visibleHoveredZoneId !== null || visibleHoveredDeviceId !== null);
+  }, [onHoverStateChange, visibleHoveredDeviceId, visibleHoveredZoneId]);
 
   return (
     <>
@@ -1197,13 +1486,18 @@ function RuntimeSceneContent({
         rotateSpeed={0.72}
         minPolarAngle={LOCKED_POLAR_ANGLE}
         maxPolarAngle={LOCKED_POLAR_ANGLE}
-        minZoom={28}
-        maxZoom={48}
+        minZoom={22}
+        maxZoom={118}
         autoRotate={autoRotateActive}
         autoRotateSpeed={AUTO_ROTATE_SPEED}
       />
 
-      <group>
+      <group
+        onPointerLeave={() => {
+          setHoveredZoneState({ id: null, token: hoverResetToken });
+          setHoveredDeviceState({ id: null, token: hoverResetToken });
+        }}
+      >
         <group position={[-sceneCenter.x, 0, -sceneCenter.z]}>
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[11, -0.1, 5.6]}>
           <planeGeometry args={[36, 26]} />
@@ -1253,6 +1547,9 @@ function RuntimeSceneContent({
             : new THREE.Vector3(center.x, 3.05, center.z);
           const trunkJunction = new THREE.Vector3(trunkX, trunkY, center.z);
           const branchHorizontal = new THREE.Vector3(branchPoint.x, trunkY, center.z);
+          const diffuserOutlet = new THREE.Vector3(branchPoint.x, branchPoint.y - 0.14, branchPoint.z);
+          const airDeliveryDrop = new THREE.Vector3(branchPoint.x, branchPoint.y - 0.34, branchPoint.z);
+          const airDeliveryTarget = new THREE.Vector3(center.x, Math.max(0.96, branchPoint.y - 0.78), center.z);
           const intensity = zone ? Math.min(zone.supplyAirflowM3H / 1500, 1) : 0.2;
           const isWorstZone = worstZoneId === space.id;
 
@@ -1280,19 +1577,22 @@ function RuntimeSceneContent({
                 radius={0.08}
                 smoothness={4}
                 position={[center.x, 0, center.z]}
-                onClick={(event) => handleRoomClick(event, space.id)}
-                onPointerOver={(event) => {
-                  event.stopPropagation();
-                  cancelRoomHoverClose();
-                  setHoveredZoneId(space.id);
-                }}
-                onPointerOut={(event) => {
-                  event.stopPropagation();
-                  scheduleRoomHoverClose(space.id);
-                }}
               >
                 <meshStandardMaterial color={getSpaceColor(zone)} metalness={0.06} roughness={0.88} />
               </RoundedBox>
+              <mesh
+                rotation={[-Math.PI / 2, 0, 0]}
+                position={[center.x, 0.18, center.z]}
+                onClick={(event) => handleRoomClick(event, space.id)}
+                onPointerMove={(event) => {
+                  event.stopPropagation();
+                  setHoveredDeviceState({ id: null, token: hoverResetToken });
+                  setHoveredZoneState({ id: space.id, token: hoverResetToken });
+                }}
+              >
+                <planeGeometry args={[space.layout.size_m.width - 0.08, space.layout.size_m.depth - 0.08]} />
+                <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+              </mesh>
 
               <ThermalOverlay center={center} width={space.layout.size_m.width} depth={space.layout.size_m.depth} zone={zone} />
               <ComfortGlow center={center} zone={zone} roomWidth={space.layout.size_m.width} />
@@ -1332,8 +1632,8 @@ function RuntimeSceneContent({
               />
               <DuctSegment
                 from={branchPoint}
-                to={new THREE.Vector3(branchPoint.x, 1.55, branchPoint.z)}
-                thickness={0.16}
+                to={diffuserOutlet}
+                thickness={0.09}
                 color="#d6dde6"
               />
 
@@ -1348,25 +1648,23 @@ function RuntimeSceneContent({
                 color={flowColor}
                 intensity={intensity}
               />
-              <FlowRoute
+              <AirDeliveryFlow
                 points={[
-                  branchPoint,
-                  new THREE.Vector3(branchPoint.x, 2.1, branchPoint.z),
-                  new THREE.Vector3(center.x, 1.42, center.z),
+                  diffuserOutlet,
+                  airDeliveryDrop,
+                  airDeliveryTarget,
                 ]}
                 color={flowColor}
-                intensity={Math.max(0.12, intensity * 0.85)}
+                intensity={Math.max(0.12, intensity * 0.7)}
               />
 
-              {hoveredZoneId === space.id ? (
+              {visibleHoveredZoneId === space.id || selectedZoneId === space.id ? (
                 <FloatingRoomBadge
                   position={[center.x, 1.55, center.z]}
                   zone={zone}
                   label={space.name}
                   isSelected={isSelected}
                   isWorstZone={isWorstZone}
-                  onPointerEnter={cancelRoomHoverClose}
-                  onPointerLeave={() => scheduleRoomHoverClose(space.id)}
                 />
               ) : null}
             </group>
@@ -1381,7 +1679,7 @@ function RuntimeSceneContent({
           }
 
           const point = getDeviceScenePosition(device);
-          const transform = getDeviceModelTransform(device);
+          const transform = getWallMountedDeviceTransform(device, product, blueprint);
           const reading = telemetryByDeviceId.get(device.id) ?? null;
           const diagnosis = diagnosisByDeviceId.get(device.id);
 
@@ -1399,12 +1697,8 @@ function RuntimeSceneContent({
                 onClick={(event) => handleDeviceClick(event, device.id)}
                 onPointerOver={(event) => {
                   event.stopPropagation();
-                  cancelDeviceHoverClose();
-                  setHoveredDeviceId(device.id);
-                }}
-                onPointerOut={(event) => {
-                  event.stopPropagation();
-                  scheduleDeviceHoverClose(device.id);
+                  setHoveredZoneState({ id: null, token: hoverResetToken });
+                  setHoveredDeviceState({ id: device.id, token: hoverResetToken });
                 }}
                 position={[
                   point.x + transform.positionOffset[0],
@@ -1416,24 +1710,23 @@ function RuntimeSceneContent({
               >
                 <RuntimeDeviceModel productId={product.id} device={device} telemetry={reading?.telemetry ?? null} />
               </group>
-              {hoveredDeviceId === device.id ? (
+              {visibleHoveredDeviceId === device.id ? (
                 <Html
                   position={[
                     point.x + transform.positionOffset[0],
-                    point.y + transform.positionOffset[1] + 1.08,
+                    point.y + transform.positionOffset[1] + DEVICE_HOVER_ANCHOR_Y_OFFSET,
                     point.z + transform.positionOffset[2],
                   ]}
-                  transform
-                  sprite
-                  distanceFactor={11}
+                  style={{
+                    pointerEvents: "none",
+                    transform: `translate(-50%, calc(-100% - ${DEVICE_HOVER_LIFT_PX}px))`,
+                  }}
                 >
                   <DeviceHoverCard
                     device={device}
                     product={product}
                     diagnosis={diagnosis}
                     telemetry={reading?.telemetry ?? null}
-                    onPointerEnter={cancelDeviceHoverClose}
-                    onPointerLeave={() => scheduleDeviceHoverClose(device.id)}
                   />
                 </Html>
               ) : null}
@@ -1495,13 +1788,17 @@ export function RuntimeScene(props: RuntimeSceneProps) {
   const controlsRef = useRef<import("three-stdlib").OrbitControls | null>(null);
   const [isSceneHovered, setIsSceneHovered] = useState(false);
   const [hasActiveHoverCard, setHasActiveHoverCard] = useState(false);
+  const [hoverResetToken, setHoverResetToken] = useState(0);
   const shouldPauseRotation = isSceneHovered || hasActiveHoverCard;
 
   return (
     <div
       className="relative h-[100svh] min-h-[720px] w-full overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.92),rgba(224,232,240,0.75)_42%,rgba(199,211,224,0.96)_100%)]"
       onPointerEnter={() => setIsSceneHovered(true)}
-      onPointerLeave={() => setIsSceneHovered(false)}
+      onPointerLeave={() => {
+        setIsSceneHovered(false);
+        setHoverResetToken((current) => current + 1);
+      }}
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-32 bg-gradient-to-b from-white/55 to-transparent" />
       <div className="pointer-events-none absolute inset-x-4 top-4 z-10 sm:inset-x-6 sm:top-5">
@@ -1557,7 +1854,7 @@ export function RuntimeScene(props: RuntimeSceneProps) {
       </div>
       <Canvas
         orthographic
-        camera={{ position: [18, 18, 18], zoom: 34, near: 0.1, far: 200 }}
+        camera={{ position: [18, 18, 18], zoom: 34, near: 0.1, far: 260 }}
         dpr={1}
         gl={{ antialias: false, powerPreference: "high-performance" }}
       >
@@ -1565,6 +1862,7 @@ export function RuntimeScene(props: RuntimeSceneProps) {
           {...props}
           autoRotateActive={!shouldPauseRotation}
           controlsRef={controlsRef}
+          hoverResetToken={hoverResetToken}
           onHoverStateChange={setHasActiveHoverCard}
         />
       </Canvas>

@@ -76,15 +76,15 @@ const productModelRegistry: Record<string, ProductModelRegistration> = {
   belimo_22rtm_5u00a_room_iaq_sensor: {
     Component: Belimo22rtm5u00aRoomIaqSensorModel,
     rotation: [0, Math.PI / 2, 0],
-    positionOffset: [0, 0, 0.012],
-    sceneScale: 2,
+    positionOffset: [0, -0.68, 0.012],
+    sceneScale: 4,
     previewScale: 10,
     previewRotation: [0.1, -0.48, 0],
   },
   belimo_edge_building_gateway: {
     Component: BelimoEdgeBuildingGatewayModel,
     rotation: [0, -Math.PI / 4, 0],
-    positionOffset: [0, 0.02, 0],
+    positionOffset: [0, -0.03, 0],
     sceneScale: 1.75,
     previewScale: 8.2,
     previewRotation: [0.18, -0.72, 0],
