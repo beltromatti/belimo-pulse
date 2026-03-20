@@ -68,9 +68,152 @@ type FlowRouteProps = {
 
 const LOCKED_POLAR_ANGLE = 0.96;
 const AUTO_ROTATE_SPEED = 0.45;
+const WALL_HEIGHT = 1.28;
+const WALL_BASE_Y = 0.08;
+const WALL_THICKNESS = 0.16;
+const WINDOW_SURFACE_OFFSET = WALL_THICKNESS / 2 + 0.012;
 const HORIZONTAL_WALL_COLOR = "#d8e0ea";
 const VERTICAL_WALL_COLOR = "#c6d0dc";
 const WINDOW_TINT_COLOR = "#d4ebff";
+
+type WallSegmentDefinition = {
+  key: string;
+  axis: "x" | "z";
+  position: [number, number, number];
+  size: [number, number, number];
+  exterior: boolean;
+};
+
+function roundGeometryValue(value: number) {
+  return Number(value.toFixed(3));
+}
+
+function collectSpaceBreakpoints(spaces: BuildingBlueprint["spaces"]) {
+  const xValues = new Set<number>();
+  const zValues = new Set<number>();
+
+  for (const space of spaces) {
+    xValues.add(roundGeometryValue(space.layout.origin_m.x));
+    xValues.add(roundGeometryValue(space.layout.origin_m.x + space.layout.size_m.width));
+    zValues.add(roundGeometryValue(space.layout.origin_m.y));
+    zValues.add(roundGeometryValue(space.layout.origin_m.y + space.layout.size_m.depth));
+  }
+
+  return {
+    x: Array.from(xValues).sort((left, right) => left - right),
+    z: Array.from(zValues).sort((left, right) => left - right),
+  };
+}
+
+function hasOutdoorFace(space: BuildingBlueprint["spaces"][number], orientationDeg: number) {
+  return [...space.envelope.opaque_surfaces, ...space.envelope.transparent_surfaces].some(
+    (surface) => surface.boundary === "outdoor" && surface.orientation_deg === orientationDeg,
+  );
+}
+
+function buildWallSegments(spaces: BuildingBlueprint["spaces"]): WallSegmentDefinition[] {
+  const breakpoints = collectSpaceBreakpoints(spaces);
+  const segments = new Map<
+    string,
+    {
+      axis: "x" | "z";
+      fixed: number;
+      start: number;
+      end: number;
+      exterior: boolean;
+    }
+  >();
+
+  const addSegment = (
+    axis: "x" | "z",
+    fixed: number,
+    start: number,
+    end: number,
+    exterior: boolean,
+  ) => {
+    const normalizedFixed = roundGeometryValue(fixed);
+    const normalizedStart = roundGeometryValue(Math.min(start, end));
+    const normalizedEnd = roundGeometryValue(Math.max(start, end));
+
+    if (normalizedEnd - normalizedStart <= 0.001) {
+      return;
+    }
+
+    const axisBreakpoints = axis === "x" ? breakpoints.z : breakpoints.x;
+    const localBreakpoints = [normalizedStart];
+
+    for (const value of axisBreakpoints) {
+      if (value > normalizedStart && value < normalizedEnd) {
+        localBreakpoints.push(value);
+      }
+    }
+
+    localBreakpoints.push(normalizedEnd);
+
+    for (let index = 0; index < localBreakpoints.length - 1; index += 1) {
+      const segmentStart = localBreakpoints[index];
+      const segmentEnd = localBreakpoints[index + 1];
+
+      if (segmentEnd - segmentStart <= 0.001) {
+        continue;
+      }
+
+      const key = `${axis}:${normalizedFixed}:${segmentStart}:${segmentEnd}`;
+      const existing = segments.get(key);
+
+      if (existing) {
+        existing.exterior = existing.exterior || exterior;
+        continue;
+      }
+
+      segments.set(key, {
+        axis,
+        fixed: normalizedFixed,
+        start: segmentStart,
+        end: segmentEnd,
+        exterior,
+      });
+    }
+  };
+
+  for (const space of spaces) {
+    const xStart = space.layout.origin_m.x;
+    const xEnd = xStart + space.layout.size_m.width;
+    const zStart = space.layout.origin_m.y;
+    const zEnd = zStart + space.layout.size_m.depth;
+
+    addSegment("z", zStart, xStart, xEnd, hasOutdoorFace(space, 0));
+    addSegment("z", zEnd, xStart, xEnd, hasOutdoorFace(space, 180));
+    addSegment("x", xStart, zStart, zEnd, hasOutdoorFace(space, 270));
+    addSegment("x", xEnd, zStart, zEnd, hasOutdoorFace(space, 90));
+  }
+
+  return Array.from(segments.entries())
+    .map(([key, segment]) => {
+      const length = roundGeometryValue(segment.end - segment.start);
+      const centerAlongAxis = roundGeometryValue((segment.start + segment.end) / 2);
+      const centerY = WALL_BASE_Y + WALL_HEIGHT / 2;
+
+      if (segment.axis === "x") {
+        return {
+          key,
+          axis: segment.axis,
+          position: [segment.fixed, centerY, centerAlongAxis] as [number, number, number],
+          size: [WALL_THICKNESS, WALL_HEIGHT, length] as [number, number, number],
+          exterior: segment.exterior,
+        };
+      }
+
+      return {
+        key,
+        axis: segment.axis,
+        position: [centerAlongAxis, centerY, segment.fixed] as [number, number, number],
+        size: [length, WALL_HEIGHT, WALL_THICKNESS] as [number, number, number],
+        exterior: segment.exterior,
+      };
+    })
+    .sort((left, right) => Number(right.exterior) - Number(left.exterior));
+}
 
 function getRoomCenter(space: BuildingBlueprint["spaces"][number]) {
   return new THREE.Vector3(
@@ -291,23 +434,27 @@ function WindowStrip({
   const isVerticalWall = orientationDeg === 90 || orientationDeg === 270;
   const position: [number, number, number] =
     orientationDeg === 0
-      ? [center.x, 0.72, center.z - 0.08]
+      ? [center.x, 0.72, center.z - WINDOW_SURFACE_OFFSET]
       : orientationDeg === 180
-        ? [center.x, 0.72, center.z + 0.08]
+        ? [center.x, 0.72, center.z + WINDOW_SURFACE_OFFSET]
         : orientationDeg === 90
-          ? [center.x + 0.08, 0.72, center.z]
-          : [center.x - 0.08, 0.72, center.z];
+          ? [center.x + WINDOW_SURFACE_OFFSET, 0.72, center.z]
+          : [center.x - WINDOW_SURFACE_OFFSET, 0.72, center.z];
   const rotation: [number, number, number] = isVerticalWall ? [0, Math.PI / 2, 0] : [0, 0, 0];
 
   return (
-    <mesh position={position} rotation={rotation}>
-      <planeGeometry args={isVerticalWall ? [1.02, width] : [width, 1.02]} />
+    <mesh position={position} rotation={rotation} renderOrder={3}>
+      <planeGeometry args={[width, 1.02]} />
       <meshStandardMaterial
         color={WINDOW_TINT_COLOR}
         transparent
         opacity={0.68}
         emissive="#8ec5f8"
         emissiveIntensity={0.18}
+        depthWrite={false}
+        polygonOffset
+        polygonOffsetFactor={-1}
+        side={THREE.DoubleSide}
       />
     </mesh>
   );
@@ -620,6 +767,7 @@ function RuntimeSceneContent({
   const flowColor = mode === "heating" ? "#ff7a45" : mode === "cooling" || mode === "economizer" ? "#42b8ff" : "#7dd3fc";
   const ductColor = mode === "heating" ? "#d9b7a6" : "#c7d5e3";
   const centers = blueprint.spaces.map((space) => getRoomCenter(space));
+  const wallSegments = useMemo(() => buildWallSegments(blueprint.spaces), [blueprint.spaces]);
   const sceneCenter = useMemo(() => {
     if (blueprint.spaces.length === 0) {
       return new THREE.Vector3(0, 0, 0);
@@ -748,6 +896,24 @@ function RuntimeSceneContent({
           color={ductColor}
         />
 
+        {wallSegments.map((segment) => (
+          <RoundedBox
+            key={segment.key}
+            args={segment.size}
+            radius={0.02}
+            smoothness={2}
+            position={segment.position}
+          >
+            <meshStandardMaterial
+              color={segment.axis === "x" ? VERTICAL_WALL_COLOR : HORIZONTAL_WALL_COLOR}
+              emissive={segment.axis === "x" ? VERTICAL_WALL_COLOR : HORIZONTAL_WALL_COLOR}
+              emissiveIntensity={segment.exterior ? 0.05 : 0.025}
+              metalness={segment.exterior ? 0.05 : 0.03}
+              roughness={segment.exterior ? 0.5 : 0.6}
+            />
+          </RoundedBox>
+        ))}
+
         {blueprint.spaces.map((space) => {
           const center = getRoomCenter(space);
           const zone = twinZones.get(space.id);
@@ -804,65 +970,12 @@ function RuntimeSceneContent({
               <ThermalOverlay center={center} width={space.layout.size_m.width} depth={space.layout.size_m.depth} zone={zone} />
               <ComfortGlow center={center} zone={zone} roomWidth={space.layout.size_m.width} />
 
-              <RoundedBox
-                args={[space.layout.size_m.width + 0.14, 0.12, 0.16]}
-                radius={0.02}
-                smoothness={2}
-                position={[center.x, 1.18, space.layout.origin_m.y]}
-              >
-                <meshStandardMaterial
-                  color={HORIZONTAL_WALL_COLOR}
-                  emissive={HORIZONTAL_WALL_COLOR}
-                  emissiveIntensity={0.04}
-                  metalness={0.03}
-                  roughness={0.58}
-                />
-              </RoundedBox>
-              <RoundedBox
-                args={[space.layout.size_m.width + 0.14, 0.12, 0.16]}
-                radius={0.02}
-                smoothness={2}
-                position={[center.x, 1.18, space.layout.origin_m.y + space.layout.size_m.depth]}
-              >
-                <meshStandardMaterial
-                  color={HORIZONTAL_WALL_COLOR}
-                  emissive={HORIZONTAL_WALL_COLOR}
-                  emissiveIntensity={0.04}
-                  metalness={0.03}
-                  roughness={0.58}
-                />
-              </RoundedBox>
-              <RoundedBox
-                args={[0.16, 1.26, space.layout.size_m.depth + 0.14]}
-                radius={0.02}
-                smoothness={2}
-                position={[space.layout.origin_m.x, 0.58, center.z]}
-              >
-                <meshStandardMaterial
-                  color={VERTICAL_WALL_COLOR}
-                  emissive={VERTICAL_WALL_COLOR}
-                  emissiveIntensity={0.03}
-                  metalness={0.04}
-                  roughness={0.52}
-                />
-              </RoundedBox>
-              <RoundedBox
-                args={[0.16, 1.26, space.layout.size_m.depth + 0.14]}
-                radius={0.02}
-                smoothness={2}
-                position={[space.layout.origin_m.x + space.layout.size_m.width, 0.58, center.z]}
-              >
-                <meshStandardMaterial
-                  color={VERTICAL_WALL_COLOR}
-                  emissive={VERTICAL_WALL_COLOR}
-                  emissiveIntensity={0.03}
-                  metalness={0.04}
-                  roughness={0.52}
-                />
-              </RoundedBox>
-
               {space.envelope.transparent_surfaces.map((surface) => {
-                const width = Math.min(space.layout.size_m.width - 0.8, Math.max(1.2, surface.area_m2 / 1.4));
+                const wallSpan =
+                  surface.orientation_deg === 90 || surface.orientation_deg === 270
+                    ? space.layout.size_m.depth
+                    : space.layout.size_m.width;
+                const width = Math.min(wallSpan - 0.8, Math.max(1.2, surface.area_m2 / 1.4));
                 const windowCenter =
                   surface.orientation_deg === 0
                     ? new THREE.Vector3(center.x, 0.72, space.layout.origin_m.y)
