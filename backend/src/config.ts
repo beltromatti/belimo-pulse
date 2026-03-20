@@ -25,7 +25,7 @@ const envSchema = z.object({
     .string()
     .default("true")
     .transform((value) => value === "true"),
-  ALLOWED_ORIGINS: z.string().default("http://localhost:3000"),
+  ALLOWED_ORIGINS: z.string().default("http://localhost:3000,https://belimo-pulse.vercel.app"),
   OPENAI_API_KEY: z
     .string()
     .min(1, "OPENAI_API_KEY is required")
