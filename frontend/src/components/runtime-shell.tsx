@@ -61,6 +61,28 @@ const modeOptions: Array<{ value: FacilityModePreference; label: string }> = [
   { value: "ventilation", label: "Vent" },
 ];
 
+const zurichTimeFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/Zurich",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+function formatZurichTime(value: string | null | undefined) {
+  if (!value) {
+    return "--";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "--";
+  }
+
+  return zurichTimeFormatter.format(date);
+}
+
 function formatZoneLabel(zoneId: string) {
   return zoneId
     .split("_")
@@ -792,11 +814,7 @@ export function RuntimeShell({
                   Raw telemetry, twin-derived zone states, device diagnoses and per-tick control context are persisted
                   for future Belimo Brain analysis. Last archived frame:{" "}
                   {persistenceSummary.lastPersistedObservedAt
-                    ? new Date(persistenceSummary.lastPersistedObservedAt).toLocaleString("en-CH", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      })
+                    ? formatZurichTime(persistenceSummary.lastPersistedObservedAt)
                     : "not yet"}
                   .
                 </p>
@@ -1162,13 +1180,7 @@ export function RuntimeShell({
                     <DetailPill
                       label="Observed"
                       value={
-                        selectedTelemetryReading
-                          ? new Date(selectedTelemetryReading.observedAt).toLocaleTimeString("en-CH", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                              second: "2-digit",
-                            })
-                          : "--"
+                        selectedTelemetryReading ? formatZurichTime(selectedTelemetryReading.observedAt) : "--"
                       }
                     />
                   </div>
@@ -1442,11 +1454,7 @@ export function RuntimeShell({
                 Raw telemetry, twin-derived zone states, device diagnoses and per-tick control context are persisted for
                 future Belimo Brain analysis. Last archived frame:{" "}
                 {persistenceSummary.lastPersistedObservedAt
-                  ? new Date(persistenceSummary.lastPersistedObservedAt).toLocaleString("en-CH", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    })
+                  ? formatZurichTime(persistenceSummary.lastPersistedObservedAt)
                   : "not yet"}
                 .
               </p>
