@@ -191,6 +191,22 @@ function formatDeviceKind(kind: DeviceDefinition["kind"]) {
   return formatLabel(kind);
 }
 
+function isDeviceAlerting(diagnosis: DeviceDiagnosis | null | undefined) {
+  if (!diagnosis) {
+    return false;
+  }
+
+  return diagnosis.alerts.length > 0 || diagnosis.healthScore < 92;
+}
+
+function getDeviceHealthLabel(diagnosis: DeviceDiagnosis | null | undefined) {
+  if (!diagnosis) {
+    return "--";
+  }
+
+  return isDeviceAlerting(diagnosis) ? "Alert" : "Nominal";
+}
+
 function getDeviceDisplayName(product: ProductDefinition) {
   return product.official_reference_models[0] ?? formatLabel(product.subtype);
 }
@@ -339,10 +355,7 @@ export function RuntimeShell({
     return deferredRuntime.twin.devices.filter((device) => relatedDevices.some((related) => related.id === device.deviceId));
   }, [deferredRuntime.twin, initial.blueprint.devices, selectedZoneId]);
 
-  const selectedZoneAlertDevices = useMemo(
-    () => selectedZoneDevices.filter((device) => device.alerts.length > 0 || device.healthScore < 92),
-    [selectedZoneDevices],
-  );
+  const selectedZoneAlertDevices = useMemo(() => selectedZoneDevices.filter((device) => isDeviceAlerting(device)), [selectedZoneDevices]);
 
   const selectedDevice = useMemo(
     () => (selectedDeviceId ? deviceById.get(selectedDeviceId) ?? null : null),
@@ -1607,7 +1620,7 @@ export function RuntimeShell({
                     />
                     <DetailPill
                       label="Health"
-                      value={selectedDeviceDiagnosis ? `${selectedDeviceDiagnosis.healthScore}%` : "--"}
+                      value={getDeviceHealthLabel(selectedDeviceDiagnosis)}
                     />
                     <DetailPill
                       label="Observed"
@@ -1623,12 +1636,14 @@ export function RuntimeShell({
                     <SectionEyebrow label="Component Details" />
                     <span
                       className={`rounded-full px-2 py-1 text-[11px] font-medium ${
-                        selectedDeviceDiagnosis?.alerts.length
+                        isDeviceAlerting(selectedDeviceDiagnosis)
                           ? "bg-rose-500/15 text-rose-700"
-                          : "bg-emerald-500/15 text-emerald-700"
+                          : selectedDeviceDiagnosis
+                            ? "bg-emerald-500/15 text-emerald-700"
+                            : "bg-slate-200/70 text-slate-600"
                       }`}
                     >
-                      {selectedDeviceDiagnosis?.alerts.length ? `${selectedDeviceDiagnosis.alerts.length} alerts` : "Nominal"}
+                      {getDeviceHealthLabel(selectedDeviceDiagnosis)}
                     </span>
                   </div>
 
@@ -1714,7 +1729,7 @@ export function RuntimeShell({
                           <div className="flex items-center justify-between gap-3">
                             <p className="text-sm font-medium text-slate-900">{device.deviceId}</p>
                             <span className="rounded-full bg-slate-950 px-2 py-1 text-[11px] font-medium text-white">
-                              {device.healthScore}%
+                              {getDeviceHealthLabel(device)}
                             </span>
                           </div>
                           <p className="mt-2 text-sm text-slate-600">{device.alerts[0] ?? "Degraded but not alarming."}</p>
@@ -1799,7 +1814,7 @@ export function RuntimeShell({
                   </div>
                 </details>
 
-                <details className="group rounded-[1.6rem] border border-white/55 bg-white/65 p-4">
+                <details open className="group rounded-[1.6rem] border border-white/55 bg-white/65 p-4">
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-3 marker:content-none [&::-webkit-details-marker]:hidden">
                     <span className="text-sm font-medium text-slate-800">Electronic Components</span>
                     <span className="rounded-full bg-slate-950 px-2 py-1 text-[11px] font-medium text-white transition group-open:rotate-180">
@@ -1813,33 +1828,41 @@ export function RuntimeShell({
                         key={device.id}
                         type="button"
                         onClick={() => handleDeviceSelection(device.id)}
-                        className="rounded-[1.35rem] border border-slate-200/80 bg-white/78 p-4 text-left transition hover:border-slate-300 hover:bg-white"
+                        className="w-full overflow-hidden rounded-[1.35rem] border border-slate-200/80 bg-white/78 p-4 text-left transition hover:border-slate-300 hover:bg-white"
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="flex items-center gap-2 text-slate-500">
-                              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-100/90 text-slate-700">
-                                <ProductLineupIcon kind={device.kind} />
-                              </span>
-                              <p className="text-[11px] font-medium uppercase tracking-[0.22em]">
+                        <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-4 sm:grid-cols-[108px_minmax(0,1fr)]">
+                          <div className="w-[96px] shrink-0 sm:w-[108px]">
+                            <ProductModelPreview
+                              product={product}
+                              device={device}
+                              telemetry={telemetryByDeviceId.get(device.id)?.telemetry ?? null}
+                              compact
+                              interactive={false}
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-start justify-between gap-3">
+                              <p className="min-w-0 text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">
                                 {formatDeviceKind(device.kind)}
                               </p>
+                              <span
+                                className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-medium ${
+                                  isDeviceAlerting(diagnosis)
+                                    ? "bg-rose-500/15 text-rose-700"
+                                    : diagnosis
+                                      ? "bg-emerald-500/15 text-emerald-700"
+                                      : "bg-slate-200/70 text-slate-600"
+                                }`}
+                              >
+                                {diagnosis ? getDeviceHealthLabel(diagnosis) : "--"}
+                              </span>
                             </div>
-                            <p className="mt-3 text-lg font-semibold tracking-[-0.03em] text-slate-950">
-                              {product.brand} {getDeviceDisplayName(product)}
-                            </p>
+                            <div className="min-w-0">
+                              <p className="mt-3 text-[1.08rem] font-semibold leading-tight tracking-[-0.03em] text-slate-950 sm:text-lg">
+                                {product.brand} {getDeviceDisplayName(product)}
+                              </p>
+                            </div>
                           </div>
-                          <span
-                            className={`rounded-full px-2 py-1 text-[11px] font-medium ${
-                              diagnosis?.alerts.length
-                                ? "bg-rose-500/15 text-rose-700"
-                                : diagnosis
-                                  ? "bg-emerald-500/15 text-emerald-700"
-                                  : "bg-slate-200/70 text-slate-600"
-                            }`}
-                          >
-                            {diagnosis?.alerts.length ? "Alert" : diagnosis ? `Health ${diagnosis.healthScore}%` : "Health --"}
-                          </span>
                         </div>
                       </button>
                     ))}

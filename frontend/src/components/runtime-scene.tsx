@@ -1852,12 +1852,12 @@ export function RuntimeScene(props: RuntimeSceneProps) {
     : 12;
   const isNight = localHour >= 21 || localHour < 6;
   const weatherLabel = isNight
-    ? "NOTTE"
+    ? "NIGHT"
     : (weatherSnapshot?.cloudCoverPct ?? 0) >= 70
-      ? "COPERTO"
+      ? "OVERCAST"
       : (weatherSnapshot?.cloudCoverPct ?? 0) >= 35
-        ? "NUVOLOSO"
-        : "SERENO";
+        ? "CLOUDY"
+        : "CLEAR";
   const cityLabel = props.blueprint.building.location.city.toLocaleUpperCase("it-IT");
   const simulationBadge =
     props.simulationActive && props.simulationPreview
