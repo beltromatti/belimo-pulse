@@ -83,11 +83,16 @@ function stepSampleLmActuator(input: ActuatorStepInput) {
   current.commandPct = input.targetPct;
 
   let movementLimit = input.truth.max_rate_pct_per_s * input.dtSeconds;
+  let obstructionTrackingOffsetPct = 0;
   if (input.obstructionSeverity > 0) {
     movementLimit *= 0.28;
+    obstructionTrackingOffsetPct = 8 + input.obstructionSeverity * 10;
   }
 
-  const biasedTarget = input.targetPct + input.truth.baseline_tracking_bias_pct;
+  const biasedTarget =
+    input.targetPct +
+    input.truth.baseline_tracking_bias_pct +
+    (input.targetPct >= current.feedbackPct ? -obstructionTrackingOffsetPct : obstructionTrackingOffsetPct * 0.45);
   const previousFeedback = current.feedbackPct;
   const nextFeedback =
     biasedTarget > previousFeedback
@@ -119,11 +124,16 @@ function stepStandardDamperActuator(input: ActuatorStepInput) {
   current.commandPct = input.targetPct;
 
   let movementLimit = input.truth.max_rate_pct_per_s * input.dtSeconds;
+  let obstructionTrackingOffsetPct = 0;
   if (input.obstructionSeverity > 0) {
     movementLimit *= 0.28;
+    obstructionTrackingOffsetPct = 7 + input.obstructionSeverity * 11;
   }
 
-  const biasedTarget = input.targetPct + input.truth.baseline_tracking_bias_pct;
+  const biasedTarget =
+    input.targetPct +
+    input.truth.baseline_tracking_bias_pct +
+    (input.targetPct >= current.feedbackPct ? -obstructionTrackingOffsetPct : obstructionTrackingOffsetPct * 0.45);
   const previousFeedback = current.feedbackPct;
   const nextFeedback =
     biasedTarget > previousFeedback

@@ -31,9 +31,11 @@ import { SandboxTruth } from "../sandbox-truth";
 import {
   MutableZoneTruth,
   SandboxActuatorState,
+  SandboxAssistPlan,
   SandboxRuntimeFault,
   SandboxRuntimeState,
   SandboxSourceMode,
+  SandboxZoneControlMemory,
 } from "./model";
 import {
   buildDeviceTelemetryRecord,
@@ -61,7 +63,7 @@ export class SandboxDataGenerationEngine {
   constructor(
     private readonly blueprint: BuildingBlueprint,
     private readonly sandboxTruth: SandboxTruth,
-    products: ProductDefinition[],
+    private readonly products: ProductDefinition[],
     private readonly weatherService: OpenMeteoWeatherService,
   ) {
     this.random = createSeededRng(sandboxTruth.runtime.random_seed);
@@ -75,12 +77,7 @@ export class SandboxDataGenerationEngine {
       severity: fault.severity,
       active: false,
     }));
-    this.controlState = {
-      sourceModePreference: "auto",
-      zoneTemperatureOffsetsC: Object.fromEntries(blueprint.spaces.map((space) => [space.id, 0])),
-      occupancyBias: 1,
-      faultOverrides: Object.fromEntries(sandboxTruth.fault_profiles.map((fault) => [fault.id, "auto"])),
-    };
+    this.controlState = this.createDefaultControlState();
     this.runtimeState = this.createInitialRuntimeState();
   }
 
@@ -90,6 +87,34 @@ export class SandboxDataGenerationEngine {
 
   getControlState() {
     return structuredClone(this.controlState);
+  }
+
+  getAssistPlan() {
+    return this.runtimeState.assistPlan ? structuredClone(this.runtimeState.assistPlan) : null;
+  }
+
+  setAssistPlan(plan: SandboxAssistPlan | null) {
+    this.runtimeState.assistPlan = plan ? structuredClone(plan) : null;
+  }
+
+  fork() {
+    const forked = new SandboxDataGenerationEngine(
+      this.blueprint,
+      this.sandboxTruth,
+      this.products,
+      this.weatherService,
+    );
+    const mutableFork = forked as unknown as {
+      runtimeState: SandboxRuntimeState;
+      runtimeFaults: SandboxRuntimeFault[];
+      controlState: RuntimeControlState;
+    };
+
+    mutableFork.runtimeState = structuredClone(this.runtimeState);
+    mutableFork.runtimeFaults = structuredClone(this.runtimeFaults);
+    mutableFork.controlState = structuredClone(this.controlState);
+
+    return forked;
   }
 
   getAvailableFaults(): RuntimeFaultDescriptor[] {
@@ -106,7 +131,17 @@ export class SandboxDataGenerationEngine {
 
     this.controlState.sourceModePreference = next.sourceModePreference;
     this.controlState.zoneTemperatureOffsetsC = next.zoneTemperatureOffsetsC;
+    this.controlState.zoneCo2SetpointsPpm = next.zoneCo2SetpointsPpm;
+    this.controlState.supplyTemperatureTrimC = next.supplyTemperatureTrimC;
+    this.controlState.ventilationBoostPct = next.ventilationBoostPct;
     this.controlState.occupancyBias = next.occupancyBias;
+    this.controlState.windowOpenFractionByZone = next.windowOpenFractionByZone;
+    this.controlState.weatherMode = next.weatherMode;
+    this.controlState.weatherOverride = next.weatherOverride;
+    this.controlState.timeMode = next.timeMode;
+    this.controlState.timeSpeedMultiplier = next.timeSpeedMultiplier;
+    this.controlState.solarGainBias = next.solarGainBias;
+    this.controlState.plugLoadBias = next.plugLoadBias;
     this.controlState.faultOverrides = next.faultOverrides;
 
     return this.getControlState();
@@ -117,6 +152,7 @@ export class SandboxDataGenerationEngine {
     const weather = await this.getWeather(now);
 
     this.runtimeState.runtimeSeconds += dtSeconds;
+    this.pruneExpiredAssistPlan();
     this.updateFaultActivation();
     const occupancyByZone = this.computeOccupancy(now);
     const zoneDemand = this.computeZoneDemand(occupancyByZone);
@@ -191,6 +227,7 @@ export class SandboxDataGenerationEngine {
     ) *
       (sourceTruth.fan_static_coeff_pa / 1100);
     this.updateZones(weather, occupancyByZone, branchFlows, staticPressurePa, dtSeconds, now);
+    this.updateZoneControlMemory(occupancyByZone, dtSeconds);
 
     const zones = Array.from(this.runtimeState.zones.values()).map((zone) => ({
       ...zone,
@@ -229,18 +266,29 @@ export class SandboxDataGenerationEngine {
 
   private createInitialRuntimeState(): SandboxRuntimeState {
     const zones = new Map<string, MutableZoneTruth>();
+    const zoneControlMemory = new Map<string, SandboxZoneControlMemory>();
     const actuators = new Map<string, SandboxActuatorState>();
 
     for (const space of this.blueprint.spaces) {
+      const initialTemperatureC = 22.4;
+      const initialCo2Ppm = 520;
       zones.set(space.id, {
         zoneId: space.id,
-        temperatureC: 22.4,
+        temperatureC: initialTemperatureC,
         relativeHumidityPct: 44,
-        co2Ppm: 520,
+        co2Ppm: initialCo2Ppm,
         occupancyCount: 0,
         supplyAirflowM3H: 0,
         sensibleLoadW: 0,
         comfortScore: 100,
+      });
+      zoneControlMemory.set(space.id, {
+        temperatureIntegralC: 0,
+        co2IntegralPpm: 0,
+        temperatureSlopeCPerMin: 0,
+        co2SlopePpmPerMin: 0,
+        lastTemperatureC: initialTemperatureC,
+        lastCo2Ppm: initialCo2Ppm,
       });
     }
 
@@ -251,6 +299,7 @@ export class SandboxDataGenerationEngine {
     return {
       runtimeSeconds: 0,
       zones,
+      zoneControlMemory,
       actuators,
       filterLoadingFactor: this.sandboxTruth.equipment_truth.filter.baseline_loading_factor,
       sourceMode: "ventilation",
@@ -260,6 +309,34 @@ export class SandboxDataGenerationEngine {
       supplyTemperatureC: 18,
       supplyRelativeHumidityPct: 45,
       supplyCo2Ppm: OUTDOOR_CO2_PPM,
+      assistPlan: null,
+    };
+  }
+
+  private createDefaultControlState(): RuntimeControlState {
+    return {
+      sourceModePreference: "auto",
+      zoneTemperatureOffsetsC: Object.fromEntries(this.blueprint.spaces.map((space) => [space.id, 0])),
+      zoneCo2SetpointsPpm: Object.fromEntries(
+        this.blueprint.spaces.map((space) => [space.id, space.comfort_targets.co2_limit_ppm]),
+      ),
+      supplyTemperatureTrimC: 0,
+      ventilationBoostPct: 0,
+      occupancyBias: 1,
+      windowOpenFractionByZone: Object.fromEntries(this.blueprint.spaces.map((space) => [space.id, 0])),
+      weatherMode: "live",
+      weatherOverride: {
+        temperatureC: this.sandboxTruth.weather.fallback_temperature_c,
+        relativeHumidityPct: this.sandboxTruth.weather.fallback_relative_humidity_pct,
+        windSpeedMps: 2,
+        windDirectionDeg: 180,
+        cloudCoverPct: 55,
+      },
+      timeMode: "live",
+      timeSpeedMultiplier: 1,
+      solarGainBias: 1,
+      plugLoadBias: 1,
+      faultOverrides: Object.fromEntries(this.sandboxTruth.fault_profiles.map((fault) => [fault.id, "auto"])),
     };
   }
 
@@ -308,24 +385,58 @@ export class SandboxDataGenerationEngine {
       const targetBand = occupied ? space.comfort_targets.occupied_temperature_band_c : space.comfort_targets.unoccupied_temperature_band_c;
       const targetMidpoint = (targetBand[0] + targetBand[1]) / 2 + this.getZoneTemperatureOffset(space.id);
       const tempError = truth.temperatureC - targetMidpoint;
-      const co2Demand = Math.max(0, (truth.co2Ppm - space.comfort_targets.co2_limit_ppm) / 200);
+      const co2Target = this.controlState.zoneCo2SetpointsPpm[space.id] ?? space.comfort_targets.co2_limit_ppm;
+      const co2Demand = Math.max(0, (truth.co2Ppm - co2Target) / 170);
+      const memory = this.getZoneControlMemory(space.id, truth);
+      const temperatureWorseningRate = Math.max(0, Math.sign(tempError || 0) * memory.temperatureSlopeCPerMin);
+      const projectedTempDemand = (Math.abs(tempError) + temperatureWorseningRate * 8) / 3.2;
+      const projectedCo2Demand = Math.max(0, truth.co2Ppm + Math.max(memory.co2SlopePpmPerMin, 0) * 10 - co2Target) / 190;
       const occupancyFloor = occupied ? 0.28 : 0.12;
-      demandByZone[space.id] = clamp(occupancyFloor + Math.abs(tempError) * 0.22 + co2Demand, 0.15, 1.15);
+      const windowPenalty = (this.controlState.windowOpenFractionByZone[space.id] ?? 0) * 0.22;
+      const temperatureIntegralDemand = Math.min(Math.abs(memory.temperatureIntegralC) / 7, 0.55);
+      const co2IntegralDemand = Math.min(Math.max(memory.co2IntegralPpm, 0) / 650, 0.45);
+      demandByZone[space.id] = clamp(
+        occupancyFloor +
+          Math.abs(tempError) * 0.18 +
+          projectedTempDemand * 0.34 +
+          temperatureIntegralDemand +
+          co2Demand * 0.92 +
+          projectedCo2Demand * 0.48 +
+          co2IntegralDemand +
+          windowPenalty,
+        0.15,
+        1.45,
+      );
     }
 
     return demandByZone;
   }
 
   private computeControls(zoneDemand: Record<string, number>, outdoorTemperatureC: number) {
+    const activeAssistPlan = this.getActiveAssistPlan();
     const averageDemand = Object.values(zoneDemand).reduce((sum, value) => sum + value, 0) / Object.keys(zoneDemand).length;
     const maxDemand = Math.max(...Object.values(zoneDemand));
     const occupiedZones = Array.from(this.runtimeState.zones.values()).filter((zone) => zone.occupancyCount > 0).length;
     const fanRange = this.blueprint.control_profiles.air_loop_design.supply_fan_speed_pct;
     const satRange = this.blueprint.control_profiles.air_loop_design.supply_air_temperature_reset_c;
-    const supplyFanSpeedPct = clamp(fanRange[0] + maxDemand * (fanRange[1] - fanRange[0]), fanRange[0], fanRange[1]);
+    const activeObstructionPenalty = this.getFaultSeverity("mechanical_obstruction_inside_damper_or_actuator");
+    const ventilationAssist = this.controlState.ventilationBoostPct;
+    let maxAirflowShortageRatio = 0;
+    const demandSignal = clamp(averageDemand * 0.54 + maxDemand * 0.34, 0, 1.16);
+    const baseFanFloorPct = fanRange[0] + 2;
+    const supplyFanSpeedPct = clamp(
+      fanRange[0] +
+        demandSignal * (fanRange[1] - fanRange[0]) +
+        maxAirflowShortageRatio * 18 +
+        ventilationAssist * 0.65 +
+        activeObstructionPenalty * 8,
+      baseFanFloorPct,
+      activeObstructionPenalty > 0 ? fanRange[1] : fanRange[1] - 3,
+    );
     const averageZoneTemp = this.averageOfZones("temperatureC");
     let maxWarmErrorC = 0;
     let maxColdErrorC = 0;
+    let maxCo2ExcessPpm = 0;
 
     for (const space of this.blueprint.spaces) {
       const zone = this.runtimeState.zones.get(space.id);
@@ -337,46 +448,104 @@ export class SandboxDataGenerationEngine {
       const occupied = zone.occupancyCount > 0;
       const targetBand = occupied ? space.comfort_targets.occupied_temperature_band_c : space.comfort_targets.unoccupied_temperature_band_c;
       const targetMidpoint = (targetBand[0] + targetBand[1]) / 2 + this.getZoneTemperatureOffset(space.id);
-      maxWarmErrorC = Math.max(maxWarmErrorC, zone.temperatureC - targetMidpoint);
-      maxColdErrorC = Math.max(maxColdErrorC, targetMidpoint - zone.temperatureC);
+      const co2Target = this.controlState.zoneCo2SetpointsPpm[space.id] ?? space.comfort_targets.co2_limit_ppm;
+      const memory = this.getZoneControlMemory(space.id, zone);
+      const projectedTemperatureC = zone.temperatureC + memory.temperatureSlopeCPerMin * 10;
+      const designFlow = this.getPrimaryActuatorForZone(space.id)?.design.design_airflow_m3_h ?? 0;
+      const minimumFlow = designFlow * clamp((occupied ? 0.56 : 0.18) + ventilationAssist / 100 * 0.12, 0.18, 0.76);
+      maxWarmErrorC = Math.max(maxWarmErrorC, zone.temperatureC - targetMidpoint, projectedTemperatureC - targetMidpoint);
+      maxColdErrorC = Math.max(maxColdErrorC, targetMidpoint - zone.temperatureC, targetMidpoint - projectedTemperatureC);
+      maxCo2ExcessPpm = Math.max(maxCo2ExcessPpm, zone.co2Ppm - co2Target, zone.co2Ppm + memory.co2SlopePpmPerMin * 10 - co2Target);
+      maxAirflowShortageRatio = Math.max(
+        maxAirflowShortageRatio,
+        designFlow > 0 ? clamp((minimumFlow - zone.supplyAirflowM3H) / designFlow, 0, 0.55) : 0,
+      );
     }
 
     let sourceMode: SandboxSourceMode = "ventilation";
     let supplyTemperatureSetpointC = satRange[1];
+    const trimC = this.controlState.supplyTemperatureTrimC;
 
-    if (this.controlState.sourceModePreference === "cooling" || maxWarmErrorC > 0.45 || averageZoneTemp > 23.4) {
+    if (
+      this.controlState.sourceModePreference === "cooling" ||
+      maxWarmErrorC > 0.24 ||
+      (maxWarmErrorC > 0.12 && averageZoneTemp > 23.1)
+    ) {
       sourceMode = "cooling";
-      supplyTemperatureSetpointC = lerp(satRange[1], satRange[0], clamp(maxWarmErrorC / 3, 0, 1));
-    } else if (this.controlState.sourceModePreference === "heating" || maxColdErrorC > 0.35 || outdoorTemperatureC < 8) {
+      supplyTemperatureSetpointC = clamp(
+        lerp(satRange[1], satRange[0], clamp(maxWarmErrorC / 2.4, 0, 1)) + trimC + 1.1,
+        13.2,
+        20,
+      );
+    } else if (
+      this.controlState.sourceModePreference === "heating" ||
+      maxColdErrorC > 0.24 ||
+      (outdoorTemperatureC < 12 && maxColdErrorC > 0.08)
+    ) {
       sourceMode = "heating";
-      supplyTemperatureSetpointC = lerp(22, 31, clamp(maxColdErrorC / 4, 0, 1));
+      supplyTemperatureSetpointC = clamp(lerp(22, 31.5, clamp(maxColdErrorC / 2.8, 0, 1)) + trimC, 20, 33);
     } else if (
       this.controlState.sourceModePreference === "economizer" ||
       (outdoorTemperatureC < this.blueprint.control_profiles.air_loop_design.economizer_lockout_temperature_c &&
         occupiedZones > 0 &&
-        maxWarmErrorC > 0.2)
+        maxWarmErrorC > 0.12)
     ) {
       sourceMode = "economizer";
-      supplyTemperatureSetpointC = 16.5;
+      supplyTemperatureSetpointC = clamp(16.5 + trimC, 14, 19);
     } else if (this.controlState.sourceModePreference === "ventilation") {
       sourceMode = "ventilation";
-      supplyTemperatureSetpointC = satRange[1];
+      supplyTemperatureSetpointC = clamp(satRange[1] + trimC, 17, 23);
     }
 
     const minOutdoor = this.getSourceDevice().design.minimum_outdoor_air_fraction ?? 0.18;
-    const outdoorAirFraction =
-      sourceMode === "economizer" ? clamp(0.45 + averageDemand * 0.35, minOutdoor, 0.95) : minOutdoor;
+    const co2Assist = clamp(maxCo2ExcessPpm / 450, 0, 0.35);
+    const boostAssist = ventilationAssist / 100;
+    let outdoorAirFraction =
+      sourceMode === "economizer"
+        ? clamp(0.45 + averageDemand * 0.35 + co2Assist + boostAssist, minOutdoor, 0.95)
+        : clamp(minOutdoor + co2Assist + boostAssist, minOutdoor, 0.65);
+    let resolvedSupplyFanSpeedPct = clamp(
+      supplyFanSpeedPct + maxAirflowShortageRatio * 20,
+      baseFanFloorPct,
+      activeObstructionPenalty > 0 ? fanRange[1] : fanRange[1],
+    );
+
+    if (activeAssistPlan) {
+      if (this.controlState.sourceModePreference === "auto" && activeAssistPlan.modeBias !== "auto") {
+        sourceMode = activeAssistPlan.modeBias;
+      }
+
+      supplyTemperatureSetpointC += activeAssistPlan.supplyTemperatureBiasC;
+      resolvedSupplyFanSpeedPct += activeAssistPlan.fanSpeedBiasPct;
+      outdoorAirFraction += activeAssistPlan.outdoorAirBias;
+    }
+
+    if (sourceMode === "heating") {
+      const assistHeatingOutdoorFloor =
+        activeAssistPlan && activeAssistPlan.outdoorAirBias < 0 ? Math.max(0.12, minOutdoor - 0.08) : minOutdoor;
+      supplyTemperatureSetpointC = clamp(supplyTemperatureSetpointC, 20, activeAssistPlan ? 34.5 : 33);
+      outdoorAirFraction = clamp(outdoorAirFraction, assistHeatingOutdoorFloor, 0.4);
+    } else if (sourceMode === "cooling") {
+      supplyTemperatureSetpointC = clamp(supplyTemperatureSetpointC, 13.2, 20);
+      outdoorAirFraction = clamp(outdoorAirFraction, minOutdoor, 0.72);
+    } else if (sourceMode === "economizer") {
+      supplyTemperatureSetpointC = clamp(supplyTemperatureSetpointC, 14, 19);
+      outdoorAirFraction = clamp(outdoorAirFraction, 0.35, 0.95);
+    } else {
+      supplyTemperatureSetpointC = clamp(supplyTemperatureSetpointC, 17, 23);
+      outdoorAirFraction = clamp(outdoorAirFraction, minOutdoor, 0.7);
+    }
 
     return {
       sourceMode,
       supplyTemperatureSetpointC,
-      supplyFanSpeedPct,
+      supplyFanSpeedPct: clamp(resolvedSupplyFanSpeedPct, baseFanFloorPct, fanRange[1]),
       outdoorAirFraction,
-      damperCommands: this.computeDamperCommands(zoneDemand),
+      damperCommands: this.computeDamperCommands(zoneDemand, activeAssistPlan),
     };
   }
 
-  private computeDamperCommands(zoneDemand: Record<string, number>) {
+  private computeDamperCommands(zoneDemand: Record<string, number>, activeAssistPlan: SandboxAssistPlan | null) {
     const commands: Record<string, number> = {
       "oa-damper-1": round(this.runtimeState.outdoorAirFraction * 100),
       "ra-damper-1": round((1 - this.runtimeState.outdoorAirFraction) * 100),
@@ -390,7 +559,12 @@ export class SandboxDataGenerationEngine {
         continue;
       }
 
-      commands[device.id] = computeZoneActuatorCommand(device.product_id, zoneDemand[servedZoneId]);
+      commands[device.id] = clamp(
+        computeZoneActuatorCommand(device.product_id, zoneDemand[servedZoneId]) +
+          (activeAssistPlan?.zoneDamperBiasPct[servedZoneId] ?? 0),
+        5,
+        100,
+      );
     }
 
     return commands;
@@ -483,12 +657,16 @@ export class SandboxDataGenerationEngine {
       const solarGainW =
         space.envelope.transparent_surfaces.reduce((sum, surface) => sum + surface.area_m2, 0) *
         110 *
-        solarGainMultiplier(weather.cloudCoverPct, hour, zoneTruth.solar_gain_scale);
-      const plugLoadW = space.internal_load_design.plug_w_per_m2 * space.geometry.area_m2;
+        solarGainMultiplier(weather.cloudCoverPct, hour, zoneTruth.solar_gain_scale) *
+        this.controlState.solarGainBias;
+      const plugLoadW = space.internal_load_design.plug_w_per_m2 * space.geometry.area_m2 * this.controlState.plugLoadBias;
       const lightingLoadW = space.internal_load_design.lighting_w_per_m2 * space.geometry.area_m2;
       const occupancySensibleW = occupancyCount * space.occupancy_design.sensible_gain_w_per_person;
       const sensibleLoadW = solarGainW + plugLoadW + lightingLoadW + occupancySensibleW;
-      const infiltrationAch = zoneTruth.effective_infiltration_ach * (1 + weather.windSpeedMps / 8);
+      const infiltrationAch =
+        zoneTruth.effective_infiltration_ach *
+        (1 + weather.windSpeedMps / 8) *
+        (1 + (this.controlState.windowOpenFractionByZone[space.id] ?? 0) * 1.75);
       zone.temperatureC = computeZoneTemperatureStep({
         dtSeconds,
         zoneTemperatureC: zone.temperatureC,
@@ -662,7 +840,92 @@ export class SandboxDataGenerationEngine {
     return this.controlState.zoneTemperatureOffsetsC[zoneId] ?? 0;
   }
 
+  private getZoneControlMemory(zoneId: string, zone: MutableZoneTruth) {
+    const current = this.runtimeState.zoneControlMemory.get(zoneId);
+
+    if (current) {
+      return current;
+    }
+
+    const initialized = {
+      temperatureIntegralC: 0,
+      co2IntegralPpm: 0,
+      temperatureSlopeCPerMin: 0,
+      co2SlopePpmPerMin: 0,
+      lastTemperatureC: zone.temperatureC,
+      lastCo2Ppm: zone.co2Ppm,
+    } satisfies SandboxZoneControlMemory;
+
+    this.runtimeState.zoneControlMemory.set(zoneId, initialized);
+    return initialized;
+  }
+
+  private updateZoneControlMemory(occupancyByZone: Record<string, number>, dtSeconds: number) {
+    const dtMinutes = dtSeconds / 60;
+
+    for (const space of this.blueprint.spaces) {
+      const zone = this.runtimeState.zones.get(space.id);
+
+      if (!zone) {
+        continue;
+      }
+
+      const memory = this.getZoneControlMemory(space.id, zone);
+      const occupied = occupancyByZone[space.id] > 0;
+      const targetBand = occupied ? space.comfort_targets.occupied_temperature_band_c : space.comfort_targets.unoccupied_temperature_band_c;
+      const targetMidpoint = (targetBand[0] + targetBand[1]) / 2 + this.getZoneTemperatureOffset(space.id);
+      const co2Target = this.controlState.zoneCo2SetpointsPpm[space.id] ?? space.comfort_targets.co2_limit_ppm;
+      const rawTemperatureSlope = (zone.temperatureC - memory.lastTemperatureC) / Math.max(dtMinutes, 0.0833);
+      const rawCo2Slope = (zone.co2Ppm - memory.lastCo2Ppm) / Math.max(dtMinutes, 0.0833);
+
+      memory.temperatureSlopeCPerMin = round(memory.temperatureSlopeCPerMin * 0.52 + rawTemperatureSlope * 0.48, 3);
+      memory.co2SlopePpmPerMin = round(memory.co2SlopePpmPerMin * 0.58 + rawCo2Slope * 0.42, 2);
+      memory.temperatureIntegralC = round(
+        clamp(memory.temperatureIntegralC * 0.9 + (zone.temperatureC - targetMidpoint) * dtMinutes, -14, 14),
+        3,
+      );
+      memory.co2IntegralPpm = round(
+        clamp(memory.co2IntegralPpm * 0.92 + Math.max(0, zone.co2Ppm - co2Target) * dtMinutes, 0, 12_000),
+        1,
+      );
+      memory.lastTemperatureC = zone.temperatureC;
+      memory.lastCo2Ppm = zone.co2Ppm;
+    }
+  }
+
+  private getActiveAssistPlan() {
+    if (!this.runtimeState.assistPlan) {
+      return null;
+    }
+
+    if (this.runtimeState.runtimeSeconds >= this.runtimeState.assistPlan.expiresAtRuntimeSeconds) {
+      this.runtimeState.assistPlan = null;
+      return null;
+    }
+
+    return this.runtimeState.assistPlan;
+  }
+
+  private pruneExpiredAssistPlan() {
+    if (this.runtimeState.assistPlan && this.runtimeState.runtimeSeconds >= this.runtimeState.assistPlan.expiresAtRuntimeSeconds) {
+      this.runtimeState.assistPlan = null;
+    }
+  }
+
   private async getWeather(now: Date) {
+    if (this.controlState.weatherMode === "manual") {
+      return {
+        source: "open-meteo" as const,
+        observedAt: now.toISOString(),
+        temperatureC: this.controlState.weatherOverride.temperatureC,
+        relativeHumidityPct: this.controlState.weatherOverride.relativeHumidityPct,
+        windSpeedMps: this.controlState.weatherOverride.windSpeedMps,
+        windDirectionDeg: this.controlState.weatherOverride.windDirectionDeg,
+        cloudCoverPct: this.controlState.weatherOverride.cloudCoverPct,
+        isStale: false,
+      };
+    }
+
     try {
       return await this.weatherService.getWeather(
         this.blueprint.building.location.latitude,

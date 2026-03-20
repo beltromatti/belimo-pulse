@@ -14,6 +14,8 @@ import {
   DeviceTelemetryRecord,
   ProductDefinition,
   SandboxTickResult,
+  SandboxTimeMode,
+  RuntimeSimulationPreview,
   TwinSnapshot,
   ZoneTwinState,
 } from "@/lib/runtime-types";
@@ -34,6 +36,11 @@ type RuntimeSceneProps = {
   onSelectDevice: (deviceId: string) => void;
   totalAirflowM3H: number;
   sourcePowerKw: number;
+  simulationPreview: RuntimeSimulationPreview | null;
+  simulationActive: boolean;
+  simulationMinute: number | null;
+  timeMode: SandboxTimeMode;
+  timeSpeedMultiplier: 1 | 2 | 5 | 10;
   onReturnToPortfolio?: () => void;
 };
 
@@ -62,12 +69,14 @@ type FlowRouteProps = {
   points: THREE.Vector3[];
   color: string;
   intensity: number;
+  speedMultiplier?: number;
 };
 
 type AirDeliveryFlowProps = {
   points: THREE.Vector3[];
   color: string;
   intensity: number;
+  speedMultiplier?: number;
 };
 
 const LOCKED_POLAR_ANGLE = 0.96;
@@ -681,7 +690,7 @@ function sampleFlowPolyline(segments: FlowPolylineSegment[], totalLength: number
   return segments.at(-1)?.to.clone() ?? new THREE.Vector3();
 }
 
-function AirDeliveryFlow({ points, color, intensity }: AirDeliveryFlowProps) {
+function AirDeliveryFlow({ points, color, intensity, speedMultiplier = 1 }: AirDeliveryFlowProps) {
   const polyline = useMemo(() => buildFlowPolyline(points), [points]);
   const particleRefs = useRef<Array<THREE.Mesh | null>>([]);
   const particles = useMemo(() => Array.from({ length: 5 }, (_, index) => index / 5), []);
@@ -711,7 +720,9 @@ function AirDeliveryFlow({ points, color, intensity }: AirDeliveryFlowProps) {
         return;
       }
 
-      const distance = (particles[index] * polyline.totalLength + time * (0.34 + intensity * 0.32)) % polyline.totalLength;
+      const distance =
+        (particles[index] * polyline.totalLength + time * (0.34 + intensity * 0.32) * speedMultiplier) %
+        polyline.totalLength;
       const point = sampleFlowPolyline(polyline.segments, polyline.totalLength, distance);
       mesh.position.copy(point);
     });
@@ -756,7 +767,7 @@ function AirDeliveryFlow({ points, color, intensity }: AirDeliveryFlowProps) {
   );
 }
 
-function FlowRoute({ points, color, intensity }: FlowRouteProps) {
+function FlowRoute({ points, color, intensity, speedMultiplier = 1 }: FlowRouteProps) {
   const polyline = useMemo(() => buildFlowPolyline(points), [points]);
   const particleRefs = useRef<Array<THREE.Mesh | null>>([]);
   const particles = useMemo(() => Array.from({ length: 6 }, (_, index) => index / 6), []);
@@ -774,7 +785,9 @@ function FlowRoute({ points, color, intensity }: FlowRouteProps) {
         return;
       }
 
-      const distance = (particles[index] * polyline.totalLength + time * (0.52 + intensity * 0.7)) % polyline.totalLength;
+      const distance =
+        (particles[index] * polyline.totalLength + time * (0.52 + intensity * 0.7) * speedMultiplier) %
+        polyline.totalLength;
       const point = sampleFlowPolyline(polyline.segments, polyline.totalLength, distance);
       mesh.position.copy(point);
     });
@@ -1392,6 +1405,8 @@ function RuntimeSceneContent({
   controlsRef,
   hoverResetToken,
   onHoverStateChange,
+  simulationPreview,
+  simulationActive,
 }: RuntimeSceneContentProps) {
   const [hoveredZoneState, setHoveredZoneState] = useState<{ id: string | null; token: number }>({
     id: null,
@@ -1416,6 +1431,7 @@ function RuntimeSceneContent({
   const mode = String(
     sandbox?.deviceReadings.find((reading) => reading.deviceId === "rtu-1")?.telemetry.operating_mode ?? "ventilation",
   );
+  const animationSpeedMultiplier = simulationActive ? simulationPreview?.accelerationFactor ?? 100 : 1;
   const flowColor = mode === "heating" ? "#ff7a45" : mode === "cooling" || mode === "economizer" ? "#42b8ff" : "#7dd3fc";
   const ductColor = mode === "heating" ? "#d9b7a6" : "#c7d5e3";
   const centers = blueprint.spaces.map((space) => getRoomCenter(space));
@@ -1665,6 +1681,7 @@ function RuntimeSceneContent({
                 ]}
                 color={flowColor}
                 intensity={intensity}
+                speedMultiplier={animationSpeedMultiplier}
               />
               <AirDeliveryFlow
                 points={[
@@ -1674,6 +1691,7 @@ function RuntimeSceneContent({
                 ]}
                 color={flowColor}
                 intensity={Math.max(0.12, intensity * 0.7)}
+                speedMultiplier={animationSpeedMultiplier}
               />
 
               {visibleHoveredZoneId === space.id || (showSelectedZoneBadge && selectedZoneId === space.id) ? (
@@ -1841,6 +1859,12 @@ export function RuntimeScene(props: RuntimeSceneProps) {
         ? "NUVOLOSO"
         : "SERENO";
   const cityLabel = props.blueprint.building.location.city.toLocaleUpperCase("it-IT");
+  const simulationBadge =
+    props.simulationActive && props.simulationPreview
+      ? `SIM ${props.simulationPreview.accelerationFactor}x · ${props.simulationMinute ?? 0}/${props.simulationPreview.horizonMinutes} min`
+      : null;
+  const runtimeSpeedBadge =
+    props.timeMode === "virtual" ? `${props.timeSpeedMultiplier}x` : null;
 
   return (
     <div
@@ -1875,9 +1899,53 @@ export function RuntimeScene(props: RuntimeSceneProps) {
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3 text-slate-950">
             <div className="flex items-center gap-3 px-1 py-1">
+              {simulationBadge ? (
+                <>
+                  <span className="rounded-full border border-[#d9691f]/25 bg-[#d9691f]/12 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#9d4511]">
+                    {simulationBadge}
+                  </span>
+                  <span className="h-6 w-px bg-slate-300/80" aria-hidden="true" />
+                </>
+              ) : null}
               <span className="text-sm font-medium tracking-[-0.02em] text-slate-700">
                 {localTimeLabel}, {cityLabel}
               </span>
+              {runtimeSpeedBadge ? (
+                <>
+                  <span className="h-6 w-px bg-slate-300/80" aria-hidden="true" />
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-full border border-[#d9691f]/18 bg-[#d9691f]/8 px-2.5 py-1 text-[11px] font-semibold tracking-[0.02em] text-[#9d4511]"
+                    aria-label={`Sandbox time accelerated to ${runtimeSpeedBadge}`}
+                  >
+                    <svg viewBox="0 0 20 20" aria-hidden="true" className="h-3.5 w-3.5">
+                      <path
+                        d="M4.5 10a5.5 5.5 0 1 0 5.5-5.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                      />
+                      <path
+                        d="M10 4.5v5l3.1 1.8"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M2.8 6.1 5.2 3.7 5.5 6.8"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    {runtimeSpeedBadge}
+                  </span>
+                </>
+              ) : null}
               <span className="h-6 w-px bg-slate-300/80" aria-hidden="true" />
               <div
                 className="flex items-center gap-2"

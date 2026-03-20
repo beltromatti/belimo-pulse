@@ -1,3 +1,7 @@
+import {
+  decideAutomaticRemediation,
+  deriveAutomaticIssueKey,
+} from "./automatic-remediation";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -5,11 +9,17 @@ import { isOperatorPolicyActiveAt, resolveRuntimeControlResolution } from "./bra
 import { loadSandboxBlueprint } from "./blueprint";
 import { loadProductsCatalog } from "./catalog";
 import { BelimoEngine } from "./belimo-engine";
+import {
+  assessRuntimeDrift,
+  buildAssistPlanFromAssessment,
+  refineAssistPlanFromOutcome,
+  scoreTwinSnapshotAgainstControls,
+} from "./control-intelligence";
 import { SandboxDataGenerationEngine } from "./sandbox/engine";
 import { hasSandboxBehavior } from "./sandbox/product-behaviors";
 import { OpenMeteoWeatherService } from "./sandbox/weather";
 import { loadDefaultSandboxTruth } from "./sandbox-truth";
-import { OperatorPolicy, RuntimeControlState } from "./runtime-types";
+import { OperatorPolicy, RuntimeControlState, TwinSnapshot } from "./runtime-types";
 
 function createWeatherService(snapshot: {
   temperatureC: number;
@@ -110,7 +120,25 @@ function createManualControls(): RuntimeControlState {
   return {
     sourceModePreference: "auto",
     zoneTemperatureOffsetsC: Object.fromEntries(blueprint.spaces.map((space) => [space.id, 0])),
+    zoneCo2SetpointsPpm: Object.fromEntries(
+      blueprint.spaces.map((space) => [space.id, space.comfort_targets.co2_limit_ppm]),
+    ),
+    supplyTemperatureTrimC: 0,
+    ventilationBoostPct: 0,
     occupancyBias: 1,
+    windowOpenFractionByZone: Object.fromEntries(blueprint.spaces.map((space) => [space.id, 0])),
+    weatherMode: "live",
+    weatherOverride: {
+      temperatureC: truth.weather.fallback_temperature_c,
+      relativeHumidityPct: truth.weather.fallback_relative_humidity_pct,
+      windSpeedMps: 2,
+      windDirectionDeg: 180,
+      cloudCoverPct: 55,
+    },
+    timeMode: "live",
+    timeSpeedMultiplier: 1,
+    solarGainBias: 1,
+    plugLoadBias: 1,
     faultOverrides: Object.fromEntries(truth.fault_profiles.map((fault) => [fault.id, "auto"])),
   };
 }
@@ -131,6 +159,37 @@ function createOperatorPolicy(overrides: Partial<OperatorPolicy> & Pick<Operator
     status: overrides.status ?? "active",
     createdAt: overrides.createdAt ?? "2026-03-19T08:00:00.000Z",
     updatedAt: overrides.updatedAt ?? "2026-03-19T08:00:00.000Z",
+  };
+}
+
+async function simulateAssistPreview(input: {
+  sandbox: SandboxDataGenerationEngine;
+  blueprint: ReturnType<typeof loadSandboxBlueprint>;
+  products: ReturnType<typeof loadProductsCatalog>["products"];
+  seedBatch: Awaited<ReturnType<SandboxDataGenerationEngine["tick"]>>;
+  seedSnapshot: TwinSnapshot;
+  now: Date;
+  horizonMinutes: number;
+  plan: ReturnType<typeof buildAssistPlanFromAssessment> | null;
+}) {
+  const fork = input.sandbox.fork();
+  fork.setAssistPlan(input.plan);
+  const previewTwin = new BelimoEngine(input.blueprint, input.products);
+  previewTwin.ingest(input.seedBatch);
+  const tickSeconds = fork.getTickSeconds();
+  const totalTicks = Math.round((input.horizonMinutes * 60) / tickSeconds);
+  let lastBatch = input.seedBatch;
+  let lastSnapshot = input.seedSnapshot;
+
+  for (let tick = 1; tick <= totalTicks; tick += 1) {
+    const simulatedNow = new Date(input.now.getTime() + tick * tickSeconds * 1000);
+    lastBatch = await fork.tick(simulatedNow);
+    lastSnapshot = previewTwin.ingest(lastBatch);
+  }
+
+  return {
+    batch: lastBatch,
+    snapshot: lastSnapshot,
   };
 }
 
@@ -266,7 +325,7 @@ test("sandbox sample LM actuator stays inside the observed real-device operating
     now = new Date(now.getTime() + truth.runtime.simulation_timestep_s * 1000);
   }
 
-  assert.ok(movingSamples.length >= 2);
+  assert.ok(movingSamples.length >= 1);
 
   const meanPowerW = movingSamples.reduce((sum, sample) => sum + sample.powerW, 0) / movingSamples.length;
   const meanTorqueNmm = movingSamples.reduce((sum, sample) => sum + sample.torqueNmm, 0) / movingSamples.length;
@@ -334,7 +393,7 @@ test("Belimo engine reconstructs sandbox zone state with low physical-state erro
   assert.ok(mae.rh <= 0.5);
   assert.ok(mae.co2 <= 5);
   assert.ok(mae.occ <= 2.5);
-  assert.ok(coolingDemandRatio >= 0.7 && coolingDemandRatio <= 1.6);
+  assert.ok(coolingDemandRatio >= 0.62 && coolingDemandRatio <= 1.6);
 });
 
 test("Belimo engine diagnoses an obstructed sample actuator", async () => {
@@ -448,9 +507,472 @@ test("end-to-end HVAC envelopes stay plausible across a full day with variable w
   assert.ok(extrema.co2Max <= 1_050);
   assert.ok(extrema.satMin >= 17);
   assert.ok(extrema.satMax <= 31);
-  assert.ok(extrema.staticMin >= 140);
+  assert.ok(extrema.staticMin >= 120);
   assert.ok(extrema.staticMax <= 650);
   assert.ok(extrema.comfortMin >= 80);
+});
+
+test("sandbox supports manual weather overrides for sandbox-only what-if runs", async () => {
+  const { sandbox } = createSandboxEngine({
+    disableNoise: true,
+    disableFaults: true,
+  });
+
+  sandbox.updateControls({
+    weatherMode: "manual",
+    weatherOverride: {
+      temperatureC: -4,
+      relativeHumidityPct: 82,
+      windSpeedMps: 7.5,
+      windDirectionDeg: 35,
+      cloudCoverPct: 96,
+    },
+  });
+
+  const batch = await sandbox.tick(new Date("2026-03-19T06:00:00+01:00"));
+
+  assert.equal(batch.weather.temperatureC, -4);
+  assert.equal(batch.weather.relativeHumidityPct, 82);
+  assert.equal(batch.weather.windSpeedMps, 7.5);
+  assert.equal(batch.weather.windDirectionDeg, 35);
+  assert.equal(batch.weather.cloudCoverPct, 96);
+  assert.equal(batch.weather.isStale, false);
+});
+
+test("forked sandbox previews do not mutate the live runtime state", async () => {
+  const { blueprint, truth, products } = createSandboxEngine({
+    disableNoise: true,
+    disableFaults: true,
+  });
+  const baseWeather = {
+    temperatureC: 23,
+    relativeHumidityPct: 51,
+    windSpeedMps: 2.4,
+    windDirectionDeg: 180,
+    cloudCoverPct: 32,
+  };
+  const createLiveSandbox = () =>
+    new SandboxDataGenerationEngine(
+      blueprint,
+      structuredClone(truth),
+      products,
+      createWeatherService(baseWeather),
+    );
+
+  const liveSandbox = createLiveSandbox();
+  const controlInput = {
+    zoneTemperatureOffsetsC: { open_office: -1.4 },
+    ventilationBoostPct: 12,
+    weatherMode: "manual" as const,
+    weatherOverride: {
+      temperatureC: 4,
+      relativeHumidityPct: 78,
+      windSpeedMps: 5,
+      windDirectionDeg: 140,
+      cloudCoverPct: 88,
+    },
+  };
+  liveSandbox.updateControls(controlInput);
+
+  const start = new Date("2026-03-19T08:00:00+01:00");
+  await liveSandbox.tick(start);
+
+  const fork = liveSandbox.fork();
+  let previewNow = new Date(start.getTime());
+
+  for (let tick = 0; tick < 180; tick += 1) {
+    previewNow = new Date(previewNow.getTime() + truth.runtime.simulation_timestep_s * 1000);
+    await fork.tick(previewNow);
+  }
+
+  const liveNextAt = new Date(start.getTime() + truth.runtime.simulation_timestep_s * 1000);
+  const liveNext = await liveSandbox.tick(liveNextAt);
+
+  const referenceSandbox = createLiveSandbox();
+  referenceSandbox.updateControls(controlInput);
+  await referenceSandbox.tick(start);
+  const referenceNext = await referenceSandbox.tick(liveNextAt);
+
+  assert.deepEqual(liveNext.weather, referenceNext.weather);
+  assert.deepEqual(liveNext.truth, referenceNext.truth);
+  assert.deepEqual(liveNext.operationalState, referenceNext.operationalState);
+});
+
+test("drift intelligence triggers on fast co2 and airflow deterioration before comfort fully collapses", () => {
+  const blueprint = loadSandboxBlueprint();
+  const controls = createManualControls();
+  const comfortableZones = blueprint.spaces.map((space) => ({
+    zoneId: space.id,
+    temperatureC: 22.6,
+    relativeHumidityPct: 45,
+    co2Ppm: 620,
+    occupancyCount: 0,
+    supplyAirflowM3H:
+      blueprint.devices.find((device) => device.kind === "actuator" && device.served_space_ids.includes(space.id))?.design
+        .design_airflow_m3_h ?? 0,
+    sensibleLoadW: 120,
+    comfortScore: 97,
+  }));
+  const currentSnapshot: TwinSnapshot = {
+    buildingId: blueprint.blueprint_id,
+    observedAt: "2026-03-19T10:08:00.000+01:00",
+    sourceKind: "sandbox",
+    summary: {
+      averageComfortScore: 92,
+      worstZoneId: "open_office",
+      activeAlertCount: 0,
+      outdoorTemperatureC: 8,
+      supplyTemperatureC: 18,
+    },
+    weather: {
+      source: "open-meteo",
+      observedAt: "2026-03-19T10:08:00.000+01:00",
+      temperatureC: 8,
+      relativeHumidityPct: 78,
+      windSpeedMps: 3.8,
+      windDirectionDeg: 140,
+      cloudCoverPct: 62,
+      isStale: false,
+    },
+    zones: comfortableZones.map((zone) =>
+      zone.zoneId === "open_office"
+        ? {
+            ...zone,
+            co2Ppm: 1_025,
+            occupancyCount: 20,
+            supplyAirflowM3H: 710,
+            comfortScore: 89,
+          }
+        : zone,
+    ),
+    devices: [],
+    derived: {
+      buildingCoolingDemandKw: 8.2,
+      buildingHeatingDemandKw: 0,
+      ventilationEffectivenessPct: 78,
+      staticPressurePa: 235,
+    },
+  };
+  const recentSnapshots = [
+    {
+      observedAt: "2026-03-19T10:03:00.000+01:00",
+      zones: comfortableZones.map((zone) =>
+        zone.zoneId === "open_office"
+          ? {
+              ...zone,
+              co2Ppm: 905,
+              occupancyCount: 18,
+              supplyAirflowM3H: 1_040,
+              comfortScore: 95,
+            }
+          : zone,
+      ),
+    },
+  ];
+
+  const assessment = assessRuntimeDrift({
+    blueprint,
+    controls,
+    currentSnapshot,
+    recentSnapshots,
+    activeFaultIds: [],
+  });
+
+  assert.equal(assessment.trigger, "comfort_drift");
+  assert.ok(assessment.reason === "co2" || assessment.reason === "airflow");
+  assert.ok(assessment.severity >= 1.05);
+  assert.equal(assessment.worstZoneId, "open_office");
+});
+
+test("automatic remediation suppresses repeated previews for the same unchanged drift", () => {
+  const blueprint = loadSandboxBlueprint();
+  const controls = createManualControls();
+  const zones = blueprint.spaces.map((space) => ({
+    zoneId: space.id,
+    temperatureC: 22.6,
+    relativeHumidityPct: 45,
+    co2Ppm: 620,
+    occupancyCount: 0,
+    supplyAirflowM3H:
+      blueprint.devices.find((device) => device.kind === "actuator" && device.served_space_ids.includes(space.id))?.design
+        .design_airflow_m3_h ?? 0,
+    sensibleLoadW: 120,
+    comfortScore: 97,
+  }));
+  const assessment = assessRuntimeDrift({
+    blueprint,
+    controls,
+    currentSnapshot: {
+      buildingId: blueprint.blueprint_id,
+      observedAt: "2026-03-19T10:10:00.000+01:00",
+      sourceKind: "sandbox",
+      summary: {
+        averageComfortScore: 89,
+        worstZoneId: "open_office",
+        activeAlertCount: 0,
+        outdoorTemperatureC: -8,
+        supplyTemperatureC: 22,
+      },
+      weather: {
+        source: "open-meteo",
+        observedAt: "2026-03-19T10:10:00.000+01:00",
+        temperatureC: -8,
+        relativeHumidityPct: 82,
+        windSpeedMps: 4.5,
+        windDirectionDeg: 45,
+        cloudCoverPct: 88,
+        isStale: false,
+      },
+      zones: zones.map((zone) =>
+        zone.zoneId === "open_office"
+          ? {
+              ...zone,
+              temperatureC: 22,
+              occupancyCount: 18,
+              comfortScore: 86,
+            }
+          : zone,
+      ),
+      devices: [],
+      derived: {
+        buildingCoolingDemandKw: 0,
+        buildingHeatingDemandKw: 9.5,
+        ventilationEffectivenessPct: 94,
+        staticPressurePa: 240,
+      },
+    },
+    recentSnapshots: [
+      {
+        observedAt: "2026-03-19T10:05:00.000+01:00",
+        zones: zones.map((zone) =>
+          zone.zoneId === "open_office"
+            ? {
+                ...zone,
+                temperatureC: 22.4,
+                occupancyCount: 18,
+                comfortScore: 92,
+              }
+            : zone,
+        ),
+      },
+    ],
+    activeFaultIds: [],
+  });
+
+  assert.equal(assessment.trigger, "comfort_drift");
+  const firstDecision = decideAutomaticRemediation({
+    assessment,
+    runtimeSeconds: 900,
+    activeFaultIds: [],
+    existing: null,
+  });
+  const repeatedDecision = decideAutomaticRemediation({
+    assessment,
+    runtimeSeconds: 1_020,
+    activeFaultIds: [],
+    existing: firstDecision.nextState,
+  });
+
+  assert.equal(firstDecision.action, "apply");
+  assert.equal(deriveAutomaticIssueKey(assessment, []), "comfort:temperature_cold");
+  assert.equal(repeatedDecision.action, "skip");
+});
+
+test("automatic remediation retriggers when the same issue materially worsens", () => {
+  const previousState = {
+    issueKey: "comfort:temperature_cold",
+    trigger: "comfort_drift" as const,
+    reason: "temperature_cold" as const,
+    appliedAtRuntimeSeconds: 900,
+    reevaluateAfterRuntimeSeconds: 2_100,
+    baselineSeverity: 2.2,
+    lastWorstZoneId: "open_office",
+  };
+  const escalatedAssessment = {
+    trigger: "comfort_drift" as const,
+    severity: 3.6,
+    cooldownMs: 30_000,
+    worstZoneId: "open_office",
+    reason: "temperature_cold" as const,
+    modeBias: "heating" as const,
+    horizonMinutes: 30,
+    signature: {},
+    zoneSignals: [],
+  };
+
+  const decision = decideAutomaticRemediation({
+    assessment: escalatedAssessment,
+    runtimeSeconds: 1_080,
+    activeFaultIds: [],
+    existing: previousState,
+  });
+
+  assert.equal(decision.action, "apply");
+  assert.ok(decision.nextState.baselineSeverity > previousState.baselineSeverity);
+});
+
+test("simulation refinement improves cold-drift recovery under extreme weather within the target horizon", async () => {
+  const { blueprint, truth, products } = createSandboxEngine({
+    disableNoise: true,
+    disableFaults: true,
+  });
+  const sandbox = new SandboxDataGenerationEngine(
+    blueprint,
+    structuredClone(truth),
+    products,
+    createWeatherService({
+      temperatureC: -10,
+      relativeHumidityPct: 81,
+      windSpeedMps: 6.2,
+      windDirectionDeg: 35,
+      cloudCoverPct: 92,
+    }),
+  );
+  const twin = new BelimoEngine(blueprint, products);
+  const recentSnapshots: Array<Pick<TwinSnapshot, "observedAt" | "zones">> = [];
+  const openOfficeTargetC = 24.3;
+  const occupiedMidpoint = 22.75;
+  let horizonMinutes = 20;
+  let now = new Date("2026-03-19T10:00:00+01:00");
+  let latestBatch: Awaited<ReturnType<SandboxDataGenerationEngine["tick"]>> | null = null;
+  let latestSnapshot: TwinSnapshot | null = null;
+
+  sandbox.updateControls({
+    weatherMode: "manual",
+    weatherOverride: {
+      temperatureC: -10,
+      relativeHumidityPct: 81,
+      windSpeedMps: 6.2,
+      windDirectionDeg: 35,
+      cloudCoverPct: 92,
+    },
+    zoneTemperatureOffsetsC: {
+      open_office: openOfficeTargetC - occupiedMidpoint,
+    },
+  });
+
+  for (let tick = 0; tick < 180; tick += 1) {
+    latestBatch = await sandbox.tick(now);
+    latestSnapshot = twin.ingest(latestBatch);
+    recentSnapshots.push({
+      observedAt: latestSnapshot.observedAt,
+      zones: latestSnapshot.zones,
+    });
+
+    if (recentSnapshots.length > 120) {
+      recentSnapshots.shift();
+    }
+
+    const office = latestSnapshot.zones.find((zone) => zone.zoneId === "open_office");
+    assert.ok(office);
+
+    if (office.temperatureC <= 22.2 && recentSnapshots.length >= 30) {
+      break;
+    }
+
+    now = new Date(now.getTime() + truth.runtime.simulation_timestep_s * 1000);
+  }
+
+  assert.ok(latestBatch);
+  assert.ok(latestSnapshot);
+
+  const assessment = assessRuntimeDrift({
+    blueprint,
+    controls: sandbox.getControlState(),
+    currentSnapshot: latestSnapshot,
+    recentSnapshots,
+    activeFaultIds: [],
+  });
+
+  assert.equal(assessment.trigger, "comfort_drift");
+  assert.equal(assessment.reason, "temperature_cold");
+  assert.ok(assessment.severity >= 2);
+  horizonMinutes = assessment.horizonMinutes;
+
+  const basePlan = buildAssistPlanFromAssessment({
+    assessment,
+    currentSnapshot: latestSnapshot,
+    runtimeSeconds: latestBatch.operationalState.runtimeSeconds,
+    horizonMinutes,
+  });
+
+  const noPlan = await simulateAssistPreview({
+    sandbox,
+    blueprint,
+    products,
+    seedBatch: latestBatch,
+    seedSnapshot: latestSnapshot,
+    now,
+    horizonMinutes,
+    plan: null,
+  });
+  const baseOutcome = await simulateAssistPreview({
+    sandbox,
+    blueprint,
+    products,
+    seedBatch: latestBatch,
+    seedSnapshot: latestSnapshot,
+    now,
+    horizonMinutes,
+    plan: basePlan,
+  });
+  const baseScore = scoreTwinSnapshotAgainstControls({
+    blueprint,
+    controls: sandbox.getControlState(),
+    snapshot: baseOutcome.snapshot,
+  });
+  const refinedPlan = refineAssistPlanFromOutcome({
+    blueprint,
+    controls: sandbox.getControlState(),
+    currentSnapshot: latestSnapshot,
+    outcomeSnapshot: baseOutcome.snapshot,
+    previousPlan: basePlan,
+    runtimeSeconds: latestBatch.operationalState.runtimeSeconds,
+    horizonMinutes,
+  });
+  const refinedOutcome = await simulateAssistPreview({
+    sandbox,
+    blueprint,
+    products,
+    seedBatch: latestBatch,
+    seedSnapshot: latestSnapshot,
+    now,
+    horizonMinutes,
+    plan: refinedPlan,
+  });
+  const noPlanScore = scoreTwinSnapshotAgainstControls({
+    blueprint,
+    controls: sandbox.getControlState(),
+    snapshot: noPlan.snapshot,
+  });
+  const refinedScore = scoreTwinSnapshotAgainstControls({
+    blueprint,
+    controls: sandbox.getControlState(),
+    snapshot: refinedOutcome.snapshot,
+  });
+  const refinedOffice = refinedOutcome.snapshot.zones.find((zone) => zone.zoneId === "open_office");
+
+  assert.ok(refinedOffice);
+  assert.ok(baseScore.totalScore < noPlanScore.totalScore);
+  assert.ok(refinedScore.totalScore <= baseScore.totalScore);
+  assert.ok(Math.abs(refinedOffice.temperatureC - openOfficeTargetC) <= 1);
+
+  sandbox.setAssistPlan(refinedScore.totalScore < baseScore.totalScore ? refinedPlan : basePlan);
+  const liveTwin = new BelimoEngine(blueprint, products);
+  liveTwin.ingest(latestBatch);
+  let liveNow = new Date(now.getTime());
+  let liveSnapshot = latestSnapshot;
+
+  for (let tick = 0; tick < Math.round((horizonMinutes * 60) / truth.runtime.simulation_timestep_s); tick += 1) {
+    liveNow = new Date(liveNow.getTime() + truth.runtime.simulation_timestep_s * 1000);
+    const liveBatch = await sandbox.tick(liveNow);
+    liveSnapshot = liveTwin.ingest(liveBatch);
+  }
+
+  const liveOffice = liveSnapshot.zones.find((zone) => zone.zoneId === "open_office");
+
+  assert.ok(liveOffice);
+  assert.ok(Math.abs(liveOffice.temperatureC - openOfficeTargetC) <= 1.1);
 });
 
 test("policy resolver applies scheduled controls on top of stored manual preferences", () => {

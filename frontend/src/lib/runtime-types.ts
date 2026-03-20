@@ -174,11 +174,32 @@ export type SandboxTickResult = {
 
 export type FacilityModePreference = "auto" | "ventilation" | "cooling" | "heating" | "economizer";
 export type FaultOverrideMode = "auto" | "forced_on" | "forced_off";
+export type SandboxWeatherMode = "live" | "manual";
+export type SandboxTimeMode = "live" | "virtual";
+export type SandboxTimeSpeedMultiplier = 1 | 2 | 5 | 10;
+
+export type SandboxWeatherOverride = {
+  temperatureC: number;
+  relativeHumidityPct: number;
+  windSpeedMps: number;
+  windDirectionDeg: number;
+  cloudCoverPct: number;
+};
 
 export type RuntimeControlState = {
   sourceModePreference: FacilityModePreference;
   zoneTemperatureOffsetsC: Record<string, number>;
+  zoneCo2SetpointsPpm: Record<string, number>;
+  supplyTemperatureTrimC: number;
+  ventilationBoostPct: number;
   occupancyBias: number;
+  windowOpenFractionByZone: Record<string, number>;
+  weatherMode: SandboxWeatherMode;
+  weatherOverride: SandboxWeatherOverride;
+  timeMode: SandboxTimeMode;
+  timeSpeedMultiplier: SandboxTimeSpeedMultiplier;
+  solarGainBias: number;
+  plugLoadBias: number;
   faultOverrides: Record<string, FaultOverrideMode>;
 };
 
@@ -199,6 +220,34 @@ export type RuntimePersistenceSummary = {
   lastPersistedObservedAt: string | null;
 };
 
+export type RuntimeSimulationTrigger = "facility_manual_change" | "fault_detected" | "comfort_drift";
+
+export type RuntimeSimulationPlan = {
+  sourceMode: Exclude<FacilityModePreference, "auto">;
+  supplyTemperatureSetpointC: number;
+  supplyFanSpeedPct: number;
+  outdoorAirFraction: number;
+  zoneDamperTargetsPct: Record<string, number>;
+};
+
+export type RuntimeSimulationFrame = {
+  simulatedMinute: number;
+  twin: TwinSnapshot;
+  sandbox: SandboxTickResult;
+};
+
+export type RuntimeSimulationPreview = {
+  id: string;
+  generatedAt: string;
+  trigger: RuntimeSimulationTrigger;
+  summary: string;
+  accelerationFactor: number;
+  horizonMinutes: number;
+  playbackDurationMs: number;
+  plan: RuntimeSimulationPlan;
+  frames: RuntimeSimulationFrame[];
+};
+
 export type RuntimeBootstrapPayload = {
   buildingId: string;
   generatedAt: string;
@@ -211,6 +260,7 @@ export type RuntimeBootstrapPayload = {
   controlResolution: RuntimeControlResolution;
   availableFaults: RuntimeFaultDescriptor[];
   persistenceSummary: RuntimePersistenceSummary;
+  latestSimulationPreview: RuntimeSimulationPreview | null;
 };
 
 export type OperatorPolicyDay = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
@@ -328,4 +378,8 @@ export type RuntimeSocketMessage =
   | {
       type: "brain_alert";
       payload: BrainAlert;
+    }
+  | {
+      type: "simulation_preview";
+      payload: RuntimeSimulationPreview;
     };

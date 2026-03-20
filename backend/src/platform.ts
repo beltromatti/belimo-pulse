@@ -1,6 +1,19 @@
+import {
+  AutomaticRemediationState,
+  decideAutomaticRemediation,
+  deriveAutomaticIssueKey,
+  shouldClearAutomaticRemediationState,
+} from "./automatic-remediation";
 import { createRuntimeControlResolution, resolveRuntimeControlResolution } from "./brain/policy-resolver";
 import { BuildingBlueprint } from "./blueprint";
+import { BelimoEngine } from "./belimo-engine";
 import { ProductDefinition } from "./catalog";
+import {
+  assessRuntimeDrift,
+  buildAssistPlanFromAssessment,
+  refineAssistPlanFromOutcome,
+  scoreTwinSnapshotAgainstControls,
+} from "./control-intelligence";
 import { applyRuntimeControlInput, cloneRuntimeControlState } from "./control-state";
 import {
   getFacilityPreferences,
@@ -21,9 +34,12 @@ import {
   RuntimeControlState,
   RuntimeFaultDescriptor,
   RuntimePersistenceSummary,
+  RuntimeSimulationPreview,
   SandboxTickResult,
   TwinSnapshot,
 } from "./runtime-types";
+import { SandboxDataGenerationEngine } from "./sandbox/engine";
+import { SandboxAssistPlan } from "./sandbox/model";
 
 type TickListener = (payload: {
   generatedAt: string;
@@ -35,8 +51,18 @@ type TickListener = (payload: {
   persistenceSummary: RuntimePersistenceSummary;
 }) => void;
 
+type SimulationPreviewListener = (preview: RuntimeSimulationPreview) => void;
+
+type RecentRuntimeSnapshot = {
+  observedAt: string;
+  twin: TwinSnapshot;
+  sandbox: SandboxTickResult;
+};
+
 export class BelimoPlatform {
-  private intervalHandle: NodeJS.Timeout | null = null;
+  private schedulerHandle: NodeJS.Timeout | null = null;
+
+  private schedulerActive = false;
 
   private isTickRunning = false;
 
@@ -60,9 +86,19 @@ export class BelimoPlatform {
 
   private readonly listeners = new Set<TickListener>();
 
+  private readonly simulationPreviewListeners = new Set<SimulationPreviewListener>();
+
   private manualControls: RuntimeControlState;
 
   private controlResolution: RuntimeControlResolution;
+
+  private latestSimulationPreview: RuntimeSimulationPreview | null = null;
+
+  private readonly automaticRemediationStates = new Map<string, AutomaticRemediationState>();
+
+  private readonly recentSnapshots: RecentRuntimeSnapshot[] = [];
+
+  private virtualClockMs: number | null = null;
 
   constructor(
     private readonly blueprint: BuildingBlueprint,
@@ -71,7 +107,8 @@ export class BelimoPlatform {
     private readonly belimoEngine: {
       ingest(batch: SandboxTickResult): TwinSnapshot;
     },
-    private readonly tickIntervalMs: number,
+    private readonly sandboxEngine: SandboxDataGenerationEngine,
+    private readonly baseTickIntervalMs: number,
   ) {
     const initialControls = this.buildingGateway.getControlState();
     this.manualControls = cloneRuntimeControlState(initialControls);
@@ -79,17 +116,18 @@ export class BelimoPlatform {
   }
 
   async start() {
+    this.schedulerActive = true;
     await upsertBlueprintRecord(this.blueprint);
     await upsertFacilityPreferences(this.blueprint.blueprint_id, this.manualControls);
-    await this.refreshEffectiveControls(new Date(), "belimo-brain-scheduler");
+    await this.refreshEffectiveControls(this.peekRuntimeNow(), "belimo-brain-scheduler");
     await this.runTick();
-    this.intervalHandle = setInterval(() => void this.runTick(), this.tickIntervalMs);
   }
 
   async stop() {
-    if (this.intervalHandle) {
-      clearInterval(this.intervalHandle);
-      this.intervalHandle = null;
+    this.schedulerActive = false;
+    if (this.schedulerHandle) {
+      clearTimeout(this.schedulerHandle);
+      this.schedulerHandle = null;
     }
   }
 
@@ -114,7 +152,7 @@ export class BelimoPlatform {
   }
 
   getTickIntervalMs() {
-    return this.tickIntervalMs;
+    return this.computeTickIntervalMs();
   }
 
   getControls() {
@@ -170,6 +208,7 @@ export class BelimoPlatform {
       controlResolution: this.getControlResolution(),
       availableFaults: this.getAvailableFaults(),
       persistenceSummary: this.getPersistenceSummary(),
+      latestSimulationPreview: this.latestSimulationPreview,
     };
   }
 
@@ -181,22 +220,47 @@ export class BelimoPlatform {
     };
   }
 
-  async updateControls(input: RuntimeControlInput, actor: string) {
+  onSimulationPreview(listener: SimulationPreviewListener) {
+    this.simulationPreviewListeners.add(listener);
+
+    return () => {
+      this.simulationPreviewListeners.delete(listener);
+    };
+  }
+
+  async updateControls(
+    input: RuntimeControlInput,
+    actor: string,
+    options?: {
+      triggerSimulationPreview?: boolean;
+    },
+  ) {
+    const previousManualControls = this.manualControls;
     this.manualControls = applyRuntimeControlInput(this.manualControls, input);
+    this.syncRuntimeClockMode(previousManualControls, this.manualControls);
+    if (options?.triggerSimulationPreview !== false) {
+      this.automaticRemediationStates.clear();
+    }
     await upsertFacilityPreferences(this.blueprint.blueprint_id, this.manualControls);
-    await this.refreshEffectiveControls(new Date(), actor);
+    await this.refreshEffectiveControls(this.peekRuntimeNow(), actor);
+    this.scheduleNextTick();
     await insertControlEvent(this.blueprint.blueprint_id, actor, "control_update", {
       input,
       manualControls: this.getManualControls(),
       effectiveControls: this.getControls(),
       activePolicies: this.getControlResolution().activePolicies,
     });
+    const simulationPreview =
+      options?.triggerSimulationPreview === false
+        ? null
+        : await this.generateSimulationPreview("facility_manual_change", this.peekRuntimeNow());
 
     this.emitTick();
     return {
       controls: this.getControls(),
       manualControls: this.getManualControls(),
       controlResolution: this.getControlResolution(),
+      simulationPreview,
     };
   }
 
@@ -206,8 +270,14 @@ export class BelimoPlatform {
     const storedPreferences = await getFacilityPreferences(this.blueprint.blueprint_id, this.manualControls);
 
     if (storedPreferences) {
+      const previousManualControls = this.manualControls;
       this.manualControls = storedPreferences;
       this.controlResolution = createRuntimeControlResolution(storedPreferences);
+      this.syncRuntimeClockMode(previousManualControls, this.manualControls);
+    }
+
+    if (this.latestTwinSnapshot?.observedAt) {
+      this.virtualClockMs = new Date(this.latestTwinSnapshot.observedAt).getTime();
     }
   }
 
@@ -219,7 +289,7 @@ export class BelimoPlatform {
     this.isTickRunning = true;
 
     try {
-      const now = new Date();
+      const now = this.getRuntimeNow();
       await this.refreshEffectiveControls(now, "belimo-brain-scheduler");
       const gatewayPoll = await this.buildingGateway.pollSnapshot(now);
       const batch = gatewayPoll.batch;
@@ -231,7 +301,14 @@ export class BelimoPlatform {
       this.latestSandboxBatch = batch;
       this.latestTwinSnapshot = snapshot;
       this.latestGatewaySnapshot = gatewayPoll.envelope;
+      this.recentSnapshots.push({
+        observedAt: snapshot.observedAt,
+        twin: snapshot,
+        sandbox: batch,
+      });
+      this.pruneRecentSnapshots();
       this.persistenceSummary = await getRuntimePersistenceSummary(this.blueprint.blueprint_id);
+      await this.maybeGenerateAutomaticPreview(now);
       this.lastError = null;
       this.emitTick();
     } catch (error) {
@@ -240,6 +317,7 @@ export class BelimoPlatform {
       this.emitTick();
     } finally {
       this.isTickRunning = false;
+      this.scheduleNextTick();
     }
   }
 
@@ -256,6 +334,80 @@ export class BelimoPlatform {
 
     for (const listener of this.listeners) {
       listener(payload);
+    }
+  }
+
+  private computeTickIntervalMs() {
+    if (this.manualControls.timeMode !== "virtual") {
+      return this.baseTickIntervalMs;
+    }
+
+    return Math.max(250, Math.round(this.baseTickIntervalMs / this.manualControls.timeSpeedMultiplier));
+  }
+
+  private scheduleNextTick() {
+    if (!this.schedulerActive) {
+      return;
+    }
+
+    if (this.schedulerHandle) {
+      clearTimeout(this.schedulerHandle);
+      this.schedulerHandle = null;
+    }
+
+    this.schedulerHandle = setTimeout(() => void this.runTick(), this.computeTickIntervalMs());
+  }
+
+  private getRuntimeNow() {
+    if (this.manualControls.timeMode !== "virtual") {
+      const liveNow = new Date();
+      this.virtualClockMs = liveNow.getTime();
+      return liveNow;
+    }
+
+    if (this.virtualClockMs === null) {
+      this.virtualClockMs = this.latestTwinSnapshot?.observedAt
+        ? new Date(this.latestTwinSnapshot.observedAt).getTime()
+        : Date.now();
+    }
+
+    const runtimeNow = new Date(this.virtualClockMs);
+    this.virtualClockMs += this.sandboxEngine.getTickSeconds() * 1000;
+    return runtimeNow;
+  }
+
+  private peekRuntimeNow() {
+    if (this.manualControls.timeMode !== "virtual") {
+      return new Date();
+    }
+
+    if (this.virtualClockMs === null) {
+      this.virtualClockMs = this.latestTwinSnapshot?.observedAt
+        ? new Date(this.latestTwinSnapshot.observedAt).getTime()
+        : Date.now();
+    }
+
+    return new Date(this.virtualClockMs);
+  }
+
+  private syncRuntimeClockMode(previous: RuntimeControlState, next: RuntimeControlState) {
+    if (previous.timeMode === next.timeMode && previous.timeSpeedMultiplier === next.timeSpeedMultiplier) {
+      return;
+    }
+
+    if (next.timeMode === "live") {
+      this.virtualClockMs = Date.now();
+      return;
+    }
+
+    this.virtualClockMs = this.latestTwinSnapshot?.observedAt
+      ? new Date(this.latestTwinSnapshot.observedAt).getTime()
+      : Date.now();
+  }
+
+  private emitSimulationPreview(preview: RuntimeSimulationPreview) {
+    for (const listener of this.simulationPreviewListeners) {
+      listener(preview);
     }
   }
 
@@ -291,5 +443,329 @@ export class BelimoPlatform {
     }
 
     return nextResolution;
+  }
+
+  private async maybeGenerateAutomaticPreview(now: Date) {
+    if (!this.latestTwinSnapshot || !this.latestSandboxBatch) {
+      return;
+    }
+
+    const runtimeSeconds = this.latestSandboxBatch.operationalState.runtimeSeconds;
+    const activeFaultIds = this.latestSandboxBatch.operationalState.activeFaults.map((fault) => fault.id).sort();
+    const assessment = assessRuntimeDrift({
+      blueprint: this.blueprint,
+      controls: this.getControls(),
+      currentSnapshot: this.latestTwinSnapshot,
+      recentSnapshots: this.recentSnapshots.map((snapshot) => ({
+        observedAt: snapshot.observedAt,
+        zones: snapshot.twin.zones,
+      })),
+      activeFaultIds,
+    });
+    this.pruneAutomaticRemediationStates(runtimeSeconds, assessment, activeFaultIds);
+
+    if (!assessment.trigger) {
+      return;
+    }
+
+    const issueKey = deriveAutomaticIssueKey(assessment, activeFaultIds);
+    const decision = decideAutomaticRemediation({
+      assessment,
+      runtimeSeconds,
+      activeFaultIds,
+      existing: this.automaticRemediationStates.get(issueKey) ?? null,
+    });
+
+    if (decision.action !== "apply") {
+      return;
+    }
+
+    const preview = await this.generateSimulationPreview(assessment.trigger, now, assessment);
+
+    if (!preview) {
+      return;
+    }
+
+    if (assessment.trigger === "comfort_drift") {
+      for (const key of this.automaticRemediationStates.keys()) {
+        if (key.startsWith("comfort:") && key !== issueKey) {
+          this.automaticRemediationStates.delete(key);
+        }
+      }
+    }
+
+    this.automaticRemediationStates.set(issueKey, decision.nextState);
+  }
+
+  private async generateSimulationPreview(
+    trigger: "facility_manual_change" | "fault_detected" | "comfort_drift",
+    now: Date,
+    precomputedAssessment = this.latestTwinSnapshot
+      ? assessRuntimeDrift({
+          blueprint: this.blueprint,
+          controls: this.getControls(),
+          currentSnapshot: this.latestTwinSnapshot,
+          recentSnapshots: this.recentSnapshots.map((snapshot) => ({
+            observedAt: snapshot.observedAt,
+            zones: snapshot.twin.zones,
+          })),
+          activeFaultIds: this.latestSandboxBatch?.operationalState.activeFaults.map((fault) => fault.id).sort() ?? [],
+        })
+      : null,
+  ) {
+    if (!this.latestSandboxBatch || !this.latestTwinSnapshot) {
+      return null;
+    }
+
+    const assessment =
+      precomputedAssessment ??
+      assessRuntimeDrift({
+        blueprint: this.blueprint,
+        controls: this.getControls(),
+        currentSnapshot: this.latestTwinSnapshot,
+        recentSnapshots: this.recentSnapshots.map((snapshot) => ({
+          observedAt: snapshot.observedAt,
+          zones: snapshot.twin.zones,
+        })),
+        activeFaultIds: this.latestSandboxBatch.operationalState.activeFaults.map((fault) => fault.id).sort(),
+      });
+    const horizonMinutes =
+      trigger === "facility_manual_change"
+        ? 20
+        : Math.max(trigger === "fault_detected" ? 30 : 15, assessment.horizonMinutes);
+    const accelerationFactor = 100;
+    const playbackDurationMs = Math.round((horizonMinutes * 60 * 1000) / accelerationFactor);
+    const runtimeSeconds = this.latestSandboxBatch.operationalState.runtimeSeconds;
+    const basePlan = buildAssistPlanFromAssessment({
+      assessment,
+      currentSnapshot: this.latestTwinSnapshot,
+      runtimeSeconds,
+      horizonMinutes,
+    });
+    const candidatePlans = this.buildCandidatePlans(basePlan, trigger);
+    const evaluations = [];
+
+    for (const candidatePlan of candidatePlans) {
+      evaluations.push(await this.simulateAssistPlan(candidatePlan, now, horizonMinutes));
+    }
+
+    let bestEvaluation = evaluations.reduce((best, current) =>
+      current.score.totalScore < best.score.totalScore ? current : best,
+    );
+
+    if (bestEvaluation.score.worstZoneScore > 0.72 && bestEvaluation.plan) {
+      for (let iteration = 0; iteration < 2; iteration += 1) {
+        const previousPlan = bestEvaluation.plan!;
+        const refinedPlan = refineAssistPlanFromOutcome({
+          blueprint: this.blueprint,
+          controls: this.getControls(),
+          currentSnapshot: this.latestTwinSnapshot,
+          outcomeSnapshot: bestEvaluation.finalTwin,
+          previousPlan,
+          runtimeSeconds,
+          horizonMinutes,
+        });
+        const refinedEvaluation = await this.simulateAssistPlan(refinedPlan, now, horizonMinutes);
+
+        if (refinedEvaluation.score.totalScore >= bestEvaluation.score.totalScore) {
+          break;
+        }
+
+        bestEvaluation = refinedEvaluation;
+      }
+    }
+
+    this.sandboxEngine.setAssistPlan(bestEvaluation.plan);
+    const frames = [
+      {
+        simulatedMinute: 0,
+        twin: this.latestTwinSnapshot,
+        sandbox: this.latestSandboxBatch,
+      },
+      ...bestEvaluation.frames,
+    ];
+    const lastBatch = bestEvaluation.finalBatch;
+    const lastTwin = bestEvaluation.finalTwin;
+
+    const sourceTelemetry = lastBatch.deviceReadings.find((reading) => reading.deviceId === "rtu-1")?.telemetry ?? {};
+    const plan = {
+      sourceMode: String(sourceTelemetry.operating_mode ?? "ventilation") as RuntimeSimulationPreview["plan"]["sourceMode"],
+      supplyTemperatureSetpointC: Number(sourceTelemetry.supply_air_temperature_c ?? lastTwin.summary.supplyTemperatureC),
+      supplyFanSpeedPct: Math.round(
+        ((Number(sourceTelemetry.supply_airflow_m3_h ?? 0) /
+          Math.max(Number(sourceTelemetry.design_supply_airflow_m3_h ?? 1), 1)) *
+          100) || 0,
+      ),
+      outdoorAirFraction: Number(sourceTelemetry.outdoor_air_fraction ?? 0.2),
+      zoneDamperTargetsPct: Object.fromEntries(
+        lastBatch.deviceReadings
+          .filter((reading) => reading.category === "actuator")
+          .map((reading) => [
+            reading.deviceId,
+            Number(
+              reading.telemetry["setpoint_position_%"] ??
+                reading.telemetry.commanded_position_pct ??
+                reading.telemetry.damper_position_pct ??
+                0,
+            ),
+          ]),
+      ),
+    };
+    const preview: RuntimeSimulationPreview = {
+      id: `${trigger}-${now.getTime()}`,
+      generatedAt: now.toISOString(),
+      trigger,
+      summary:
+        trigger === "facility_manual_change"
+          ? "Previewing the next stabilized response before committing the operator request to the live sandbox."
+          : trigger === "fault_detected"
+            ? "Previewing the control recovery path around the detected equipment fault."
+            : "Previewing the corrective response to the current comfort drift.",
+      accelerationFactor,
+      horizonMinutes,
+      playbackDurationMs,
+      plan,
+      frames,
+    };
+
+    this.latestSimulationPreview = preview;
+    this.emitSimulationPreview(preview);
+    return preview;
+  }
+
+  private buildCandidatePlans(basePlan: SandboxAssistPlan, trigger: RuntimeSimulationPreview["trigger"]) {
+    const scales = trigger === "fault_detected" ? [0.9, 1, 1.25, 1.45] : [0.75, 1, 1.2];
+    const scaledPlans = scales.map((scale) => this.scaleAssistPlan(basePlan, scale));
+    const fanEmphasisPlan = {
+      ...basePlan,
+      fanSpeedBiasPct: Math.min(35, basePlan.fanSpeedBiasPct + 6),
+      zoneDamperBiasPct: Object.fromEntries(
+        Object.entries(basePlan.zoneDamperBiasPct).map(([zoneId, bias]) => [zoneId, Math.min(24, bias + 4)]),
+      ),
+    } satisfies SandboxAssistPlan;
+    const ventilationRecoveryPlan = {
+      ...basePlan,
+      modeBias:
+        basePlan.modeBias === "heating" || basePlan.modeBias === "cooling"
+          ? basePlan.modeBias
+          : "economizer",
+      outdoorAirBias: Math.min(0.4, basePlan.outdoorAirBias + 0.08),
+      fanSpeedBiasPct: Math.min(35, basePlan.fanSpeedBiasPct + 4),
+    } satisfies SandboxAssistPlan;
+
+    return this.deduplicatePlans([null, this.sandboxEngine.getAssistPlan(), ...scaledPlans, fanEmphasisPlan, ventilationRecoveryPlan]);
+  }
+
+  private scaleAssistPlan(plan: SandboxAssistPlan, factor: number) {
+    return {
+      ...plan,
+      supplyTemperatureBiasC: Number((plan.supplyTemperatureBiasC * factor).toFixed(2)),
+      fanSpeedBiasPct: Number((plan.fanSpeedBiasPct * factor).toFixed(1)),
+      outdoorAirBias: Number((plan.outdoorAirBias * factor).toFixed(3)),
+      zoneDamperBiasPct: Object.fromEntries(
+        Object.entries(plan.zoneDamperBiasPct).map(([zoneId, bias]) => [zoneId, Math.round(bias * factor)]),
+      ),
+    } satisfies SandboxAssistPlan;
+  }
+
+  private deduplicatePlans(plans: Array<SandboxAssistPlan | null>) {
+    const seen = new Set<string>();
+    const deduped: Array<SandboxAssistPlan | null> = [];
+
+    for (const plan of plans) {
+      const key = JSON.stringify(plan);
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      deduped.push(plan);
+    }
+
+    return deduped;
+  }
+
+  private async simulateAssistPlan(plan: SandboxAssistPlan | null, now: Date, horizonMinutes: number) {
+    const fork = this.sandboxEngine.fork();
+    fork.setAssistPlan(plan);
+    const previewTwinEngine = new BelimoEngine(this.blueprint, this.products);
+    previewTwinEngine.ingest(this.latestSandboxBatch as SandboxTickResult);
+    const tickSeconds = fork.getTickSeconds();
+    const totalTicks = Math.max(1, Math.round((horizonMinutes * 60) / tickSeconds));
+    const captureEveryTicks = Math.max(1, Math.floor(totalTicks / 12));
+    const frames: RuntimeSimulationPreview["frames"] = [];
+    let lastBatch = this.latestSandboxBatch as SandboxTickResult;
+    let lastTwin = this.latestTwinSnapshot as TwinSnapshot;
+
+    for (let tick = 1; tick <= totalTicks; tick += 1) {
+      const simulatedNow = new Date(now.getTime() + tick * tickSeconds * 1000);
+      lastBatch = await fork.tick(simulatedNow);
+      lastTwin = previewTwinEngine.ingest(lastBatch);
+
+      if (tick === totalTicks || tick % captureEveryTicks === 0) {
+        frames.push({
+          simulatedMinute: Math.round((tick * tickSeconds) / 60),
+          twin: lastTwin,
+          sandbox: lastBatch,
+        });
+      }
+    }
+
+    return {
+      plan,
+      frames,
+      finalBatch: lastBatch,
+      finalTwin: lastTwin,
+      score: scoreTwinSnapshotAgainstControls({
+        blueprint: this.blueprint,
+        controls: this.getControls(),
+        snapshot: lastTwin,
+      }),
+    };
+  }
+
+  private pruneRecentSnapshots() {
+    const latest = this.recentSnapshots[this.recentSnapshots.length - 1];
+
+    if (!latest) {
+      return;
+    }
+
+    const latestMs = new Date(latest.observedAt).getTime();
+
+    while (this.recentSnapshots.length > 0) {
+      const oldest = this.recentSnapshots[0];
+      const ageMs = latestMs - new Date(oldest.observedAt).getTime();
+
+      if (ageMs <= 12 * 60_000 && this.recentSnapshots.length <= 180) {
+        break;
+      }
+
+      this.recentSnapshots.shift();
+    }
+  }
+
+  private pruneAutomaticRemediationStates(
+    runtimeSeconds: number,
+    assessment: ReturnType<typeof assessRuntimeDrift>,
+    activeFaultIds: string[],
+  ) {
+    const currentIssueKey = deriveAutomaticIssueKey(assessment, activeFaultIds);
+
+    for (const [issueKey, state] of this.automaticRemediationStates.entries()) {
+      if (runtimeSeconds - state.appliedAtRuntimeSeconds > 90 * 60) {
+        this.automaticRemediationStates.delete(issueKey);
+        continue;
+      }
+
+      if (issueKey !== currentIssueKey) {
+        continue;
+      }
+
+      if (shouldClearAutomaticRemediationState(assessment, state)) {
+        this.automaticRemediationStates.delete(issueKey);
+      }
+    }
   }
 }

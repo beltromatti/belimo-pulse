@@ -13,7 +13,6 @@ import {
 } from "react";
 
 import {
-  ActiveControlPolicy,
   BrainAlert,
   DeviceDefinition,
   DeviceDiagnosis,
@@ -24,6 +23,7 @@ import {
   ProductDefinition,
   RuntimeBootstrapPayload,
   RuntimeControlState,
+  RuntimeSimulationPreview,
   RuntimeSocketMessage,
   ZoneTwinState,
 } from "@/lib/runtime-types";
@@ -53,6 +53,8 @@ type RuntimeState = {
   persistenceSummary: RuntimeBootstrapPayload["persistenceSummary"];
 };
 
+const SIMULATION_ACCELERATION_FACTOR = 100;
+
 const modeOptions: Array<{ value: FacilityModePreference; label: string }> = [
   { value: "auto", label: "Auto" },
   { value: "heating", label: "Heat" },
@@ -60,6 +62,13 @@ const modeOptions: Array<{ value: FacilityModePreference; label: string }> = [
   { value: "economizer", label: "Eco" },
   { value: "ventilation", label: "Vent" },
 ];
+
+const sandboxTimeModeOptions = [
+  { value: "live", label: "Real time" },
+  { value: "virtual", label: "Virtual time" },
+] as const;
+
+const sandboxTimeSpeedOptions = [2, 5, 10] as const;
 
 const zurichTimeFormatter = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Europe/Zurich",
@@ -96,46 +105,22 @@ function formatModeLabel(mode: string) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-function formatPolicyScheduleLabel(policy: OperatorPolicy) {
-  if (!policy.schedule) {
-    return "Always active";
-  }
-
-  return `${policy.schedule.daysOfWeek
-    .map((day) => day.charAt(0).toUpperCase() + day.slice(1))
-    .join(", ")} ${policy.schedule.startLocalTime}-${policy.schedule.endLocalTime}`;
-}
-
-function formatPolicyScopeLabel(policy: OperatorPolicy, initial: RuntimeBootstrapPayload) {
-  if (policy.scopeType !== "zone" || !policy.scopeId) {
-    return initial.blueprint.building.name;
-  }
-
-  return initial.blueprint.spaces.find((space) => space.id === policy.scopeId)?.name ?? policy.scopeId;
-}
-
-function formatAppliedControlPath(path: string, initial: RuntimeBootstrapPayload) {
-  if (path === "occupancyBias") {
-    return "Occupancy bias";
-  }
-
-  if (path === "sourceModePreference") {
-    return "Source mode preference";
-  }
-
-  if (path.startsWith("zoneTemperatureOffsetsC.")) {
-    const zoneId = path.replace("zoneTemperatureOffsetsC.", "");
-    return initial.blueprint.spaces.find((space) => space.id === zoneId)?.name ?? zoneId;
-  }
-
-  return formatModeLabel(path);
-}
-
 function formatLabel(value: string) {
   return value
     .replaceAll("_", " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
+
+function getZoneOccupiedMidpoint(space: RuntimeBootstrapPayload["blueprint"]["spaces"][number]) {
+  const [minC, maxC] = space.comfort_targets.occupied_temperature_band_c;
+  return (minC + maxC) / 2;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+type ControlScope = "facility" | "sandbox";
 
 function formatValue(value: unknown): string | null {
   if (typeof value === "boolean") {
@@ -298,7 +283,7 @@ function getSourceReading(readings: DeviceTelemetryRecord[] | undefined) {
 export function RuntimeShell({
   initial,
   initialBrainAlerts,
-  initialBrainPolicies,
+  initialBrainPolicies: _initialBrainPolicies,
   websocketUrl,
   onReturnToPortfolio,
 }: RuntimeShellProps) {
@@ -319,7 +304,11 @@ export function RuntimeShell({
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
   const [brainAlerts, setBrainAlerts] = useState<BrainAlert[]>(initialBrainAlerts ?? []);
-  const [brainPolicies, setBrainPolicies] = useState<OperatorPolicy[]>(initialBrainPolicies ?? []);
+  const [, setBrainPolicies] = useState<OperatorPolicy[]>(_initialBrainPolicies ?? []);
+  const [simulationPreview, setSimulationPreview] = useState<RuntimeSimulationPreview | null>(
+    initial.latestSimulationPreview,
+  );
+  const [simulationElapsedMs, setSimulationElapsedMs] = useState<number | null>(null);
   const [isPending, startUiTransition] = useTransition();
   const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState(false);
   const [isRightDrawerOpen, setIsRightDrawerOpen] = useState(false);
@@ -437,12 +426,6 @@ export function RuntimeShell({
       });
   }, [diagnosisByDeviceId, initial.blueprint.devices, productById]);
 
-  const visibleBrainPolicies = useMemo(() => brainPolicies.slice(0, 5), [brainPolicies]);
-  const activeControlPolicies = useMemo(
-    () => runtime.controlResolution.activePolicies,
-    [runtime.controlResolution.activePolicies],
-  );
-
   const sourceReading = getSourceReading(deferredRuntime.sandbox?.deviceReadings);
   const sourceTelemetry = sourceReading?.telemetry ?? {};
   const activeFaults = deferredRuntime.sandbox?.operationalState.activeFaults ?? [];
@@ -450,6 +433,35 @@ export function RuntimeShell({
   const persistenceSummary = deferredRuntime.persistenceSummary;
   const totalAirflow = deferredRuntime.sandbox?.truth.supplyAirflowM3H ?? 0;
   const sourcePower = Number(sourceTelemetry.electrical_power_kw ?? 0);
+  const simulationFrame = useMemo(() => {
+    if (!simulationPreview || simulationElapsedMs === null) {
+      return null;
+    }
+
+    const progress = clampNumber(
+      simulationElapsedMs / Math.max(simulationPreview.playbackDurationMs, 1),
+      0,
+      1,
+    );
+    const frameIndex = Math.min(
+      simulationPreview.frames.length - 1,
+      Math.floor(progress * Math.max(simulationPreview.frames.length - 1, 0)),
+    );
+
+    return simulationPreview.frames[frameIndex] ?? null;
+  }, [simulationElapsedMs, simulationPreview]);
+  const isSimulationActive = simulationPreview !== null && simulationElapsedMs !== null;
+  const displayedTwin = simulationFrame?.twin ?? deferredRuntime.twin;
+  const displayedSandbox = simulationFrame?.sandbox ?? deferredRuntime.sandbox;
+  const displayedTotalAirflow = displayedSandbox?.truth.supplyAirflowM3H ?? totalAirflow;
+  const displayedSourceTelemetry =
+    displayedSandbox?.deviceReadings.find((reading) => reading.deviceId === "rtu-1")?.telemetry ?? sourceTelemetry;
+  const displayedSourcePower = Number(displayedSourceTelemetry.electrical_power_kw ?? sourcePower);
+  const simulationMinute = simulationFrame?.simulatedMinute ?? null;
+  const simulationProgressLabel =
+    simulationPreview && simulationMinute !== null
+      ? `${simulationMinute}/${simulationPreview.horizonMinutes} min`
+      : null;
 
   function handleZoneSelection(zoneId: string) {
     setSelectedZoneId(zoneId);
@@ -482,6 +494,35 @@ export function RuntimeShell({
       return next;
     });
   }
+
+  useEffect(() => {
+    if (!simulationPreview) {
+      setSimulationElapsedMs(null);
+      return;
+    }
+
+    let frameId = 0;
+    const startedAt = performance.now();
+
+    const animate = (now: number) => {
+      const elapsed = now - startedAt;
+
+      if (elapsed >= simulationPreview.playbackDurationMs) {
+        setSimulationElapsedMs(null);
+        return;
+      }
+
+      setSimulationElapsedMs(elapsed);
+      frameId = window.requestAnimationFrame(animate);
+    };
+
+    setSimulationElapsedMs(0);
+    frameId = window.requestAnimationFrame(animate);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [simulationPreview]);
 
   const handleSocketMessage = useEffectEvent((message: RuntimeSocketMessage) => {
     if (message.type === "hello") {
@@ -532,6 +573,11 @@ export function RuntimeShell({
 
     if (message.type === "brain_alert") {
       setBrainAlerts((prev) => [...prev.slice(-19), message.payload]);
+      return;
+    }
+
+    if (message.type === "simulation_preview") {
+      setSimulationPreview(message.payload);
       return;
     }
 
@@ -635,7 +681,7 @@ export function RuntimeShell({
     };
   }, [websocketUrl]);
 
-  const submitControls = async (next: Partial<RuntimeControlState>) => {
+  const submitControls = async (next: Partial<RuntimeControlState>, scope: ControlScope = "facility") => {
     startUiTransition(async () => {
       setControlError(null);
 
@@ -647,6 +693,7 @@ export function RuntimeShell({
           },
           body: JSON.stringify({
             actor: "frontend-control-center",
+            controlScope: scope,
             ...next,
           }),
         });
@@ -656,6 +703,7 @@ export function RuntimeShell({
           controls?: RuntimeControlState;
           manualControls?: RuntimeControlState;
           controlResolution?: RuntimeState["controlResolution"];
+          simulationPreview?: RuntimeSimulationPreview | null;
           message?: string;
         };
 
@@ -671,6 +719,9 @@ export function RuntimeShell({
           controlResolution: payload.controlResolution ?? current.controlResolution,
         }));
         setDraftControls(payload.manualControls);
+        if (payload.simulationPreview) {
+          setSimulationPreview(payload.simulationPreview);
+        }
       } catch (error) {
         setControlError(error instanceof Error ? error.message : "Unexpected control error.");
       }
@@ -692,6 +743,41 @@ export function RuntimeShell({
     });
   };
 
+  const commitZoneCo2Setpoint = (zoneId: string) => {
+    const draftValue = draftControls.zoneCo2SetpointsPpm[zoneId] ?? 900;
+    const currentValue = runtime.manualControls.zoneCo2SetpointsPpm[zoneId] ?? 900;
+
+    if (draftValue === currentValue) {
+      return;
+    }
+
+    void submitControls({
+      zoneCo2SetpointsPpm: {
+        [zoneId]: draftValue,
+      },
+    });
+  };
+
+  const commitSupplyTemperatureTrim = () => {
+    if (draftControls.supplyTemperatureTrimC === runtime.manualControls.supplyTemperatureTrimC) {
+      return;
+    }
+
+    void submitControls({
+      supplyTemperatureTrimC: draftControls.supplyTemperatureTrimC,
+    });
+  };
+
+  const commitVentilationBoost = () => {
+    if (draftControls.ventilationBoostPct === runtime.manualControls.ventilationBoostPct) {
+      return;
+    }
+
+    void submitControls({
+      ventilationBoostPct: draftControls.ventilationBoostPct,
+    });
+  };
+
   const commitOccupancyBias = () => {
     if (draftControls.occupancyBias === runtime.manualControls.occupancyBias) {
       return;
@@ -699,7 +785,102 @@ export function RuntimeShell({
 
     void submitControls({
       occupancyBias: draftControls.occupancyBias,
-    });
+    }, "sandbox");
+  };
+
+  const commitWindowOpenFraction = (zoneId: string) => {
+    const draftValue = draftControls.windowOpenFractionByZone[zoneId] ?? 0;
+    const currentValue = runtime.manualControls.windowOpenFractionByZone[zoneId] ?? 0;
+
+    if (draftValue === currentValue) {
+      return;
+    }
+
+    void submitControls({
+      windowOpenFractionByZone: {
+        [zoneId]: draftValue,
+      },
+    }, "sandbox");
+  };
+
+  const commitSolarGainBias = () => {
+    if (draftControls.solarGainBias === runtime.manualControls.solarGainBias) {
+      return;
+    }
+
+    void submitControls({
+      solarGainBias: draftControls.solarGainBias,
+    }, "sandbox");
+  };
+
+  const commitPlugLoadBias = () => {
+    if (draftControls.plugLoadBias === runtime.manualControls.plugLoadBias) {
+      return;
+    }
+
+    void submitControls({
+      plugLoadBias: draftControls.plugLoadBias,
+    }, "sandbox");
+  };
+
+  const commitWeatherMode = (mode: RuntimeControlState["weatherMode"]) => {
+    if (mode === runtime.manualControls.weatherMode) {
+      return;
+    }
+
+    void submitControls({
+      weatherMode: mode,
+    }, "sandbox");
+  };
+
+  const commitTimeMode = (mode: RuntimeControlState["timeMode"]) => {
+    if (mode === runtime.manualControls.timeMode) {
+      return;
+    }
+
+    void submitControls(
+      {
+        timeMode: mode,
+        timeSpeedMultiplier: mode === "virtual" ? Math.max(draftControls.timeSpeedMultiplier, 2) as 2 | 5 | 10 : 1,
+      },
+      "sandbox",
+    );
+  };
+
+  const commitTimeSpeedMultiplier = (multiplier: 2 | 5 | 10) => {
+    if (
+      runtime.manualControls.timeMode === "virtual" &&
+      runtime.manualControls.timeSpeedMultiplier === multiplier
+    ) {
+      return;
+    }
+
+    void submitControls(
+      {
+        timeMode: "virtual",
+        timeSpeedMultiplier: multiplier,
+      },
+      "sandbox",
+    );
+  };
+
+  const commitWeatherOverride = () => {
+    const currentWeather = runtime.manualControls.weatherOverride;
+    const draftWeather = draftControls.weatherOverride;
+
+    if (
+      currentWeather.temperatureC === draftWeather.temperatureC &&
+      currentWeather.relativeHumidityPct === draftWeather.relativeHumidityPct &&
+      currentWeather.windSpeedMps === draftWeather.windSpeedMps &&
+      currentWeather.windDirectionDeg === draftWeather.windDirectionDeg &&
+      currentWeather.cloudCoverPct === draftWeather.cloudCoverPct
+    ) {
+      return;
+    }
+
+    void submitControls({
+      weatherOverride: draftWeather,
+    }, "sandbox");
   };
 
   useEffect(() => {
@@ -827,7 +1008,12 @@ export function RuntimeShell({
             </CardBlock>
 
             <CardBlock>
-              <SectionEyebrow label="Facility Controls" />
+              <SectionEyebrow label="Facility Control Panel" />
+              <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-slate-950">Operator Intent</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Set the comfort requirements here. Each change triggers a fast-forward twin simulation before the
+                sandbox gateway applies the new control path.
+              </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 {modeOptions.map((option) => (
                   <button
@@ -844,101 +1030,74 @@ export function RuntimeShell({
                   </button>
                 ))}
               </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <DetailPill
+                  label="Focused Zone"
+                  value={selectedSpace?.name ?? "Select a room"}
+                />
+                <DetailPill
+                  label="Preview"
+                  value={
+                    simulationPreview
+                      ? `${simulationPreview.accelerationFactor}x · ${simulationProgressLabel ?? `${simulationPreview.horizonMinutes} min`}`
+                      : "Idle"
+                  }
+                />
+                <DetailPill
+                  label="Supply Trim"
+                  value={`${draftControls.supplyTemperatureTrimC.toFixed(1)}°C`}
+                />
+                <DetailPill
+                  label="Vent Boost"
+                  value={`${draftControls.ventilationBoostPct.toFixed(0)}%`}
+                />
+              </div>
               {runtime.controls.sourceModePreference !== runtime.manualControls.sourceModePreference ? (
-                <p className="mt-3 rounded-2xl border border-[#d9691f]/15 bg-[#d9691f]/8 px-3 py-2 text-sm text-[#8f4313]">
-                  Belimo Brain is currently applying <span className="font-medium">{formatModeLabel(runtime.controls.sourceModePreference)}</span>{" "}
-                  instead of the stored manual preference because an active policy is in force.
+                <p className="mt-4 rounded-2xl border border-[#d9691f]/15 bg-[#d9691f]/8 px-3 py-2 text-sm text-[#8f4313]">
+                  The runtime is currently applying <span className="font-medium">{formatModeLabel(runtime.controls.sourceModePreference)}</span>{" "}
+                  because a stored policy is overriding the manual preference.
                 </p>
               ) : null}
-
             </CardBlock>
 
             <CardBlock>
-              <SectionEyebrow label="Selected Zone Tuning" />
-              <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-slate-950">
-                {selectedSpace?.name ?? "No selection"}
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                Keep room-level tuning focused on the zone you are actively inspecting in the 3D twin.
-              </p>
-              {selectedSpace ? (
-                <div className="mt-4">
-                  <label className="flex items-center justify-between text-sm font-medium text-slate-700">
-                    <span>Temperature offset</span>
-                    <span className="font-mono text-slate-500">
-                      {(draftControls.zoneTemperatureOffsetsC[selectedSpace.id] ?? 0).toFixed(1)}°C
-                    </span>
-                  </label>
-                  <input
-                    type="range"
-                    min="-3"
-                    max="3"
-                    step="0.1"
-                    value={draftControls.zoneTemperatureOffsetsC[selectedSpace.id] ?? 0}
-                    onChange={(event) =>
-                      setDraftControls((current) => ({
-                        ...current,
-                        zoneTemperatureOffsetsC: {
-                          ...current.zoneTemperatureOffsetsC,
-                          [selectedSpace.id]: Number(event.target.value),
-                        },
-                      }))
-                    }
-                    onPointerUp={() => commitZoneOffset(selectedSpace.id)}
-                    onTouchEnd={() => commitZoneOffset(selectedSpace.id)}
-                    onBlur={() => commitZoneOffset(selectedSpace.id)}
-                    onKeyUp={(event) => {
-                      if (event.key === "Enter" || event.key.startsWith("Arrow")) {
-                        commitZoneOffset(selectedSpace.id);
-                      }
-                    }}
-                    className="mt-3 w-full accent-[#d9691f]"
-                  />
-                  {runtime.controls.zoneTemperatureOffsetsC[selectedSpace.id] !==
-                  runtime.manualControls.zoneTemperatureOffsetsC[selectedSpace.id] ? (
-                    <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-400">
-                      Applied now {(runtime.controls.zoneTemperatureOffsetsC[selectedSpace.id] ?? 0).toFixed(1)}°C from Belimo Brain schedule
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-            </CardBlock>
+              <SectionEyebrow label="Room Targets" />
+              <div className="mt-4 space-y-5">
+                {initial.blueprint.spaces.map((space) => {
+                  const occupiedMidpoint = getZoneOccupiedMidpoint(space);
+                  const draftTargetTemperatureC =
+                    occupiedMidpoint + (draftControls.zoneTemperatureOffsetsC[space.id] ?? 0);
+                  const comfortBand = space.comfort_targets.occupied_temperature_band_c;
+                  const targetMin = Math.max(19, comfortBand[0] - 1.5);
+                  const targetMax = Math.min(26, comfortBand[1] + 1.5);
 
-            <details className="group rounded-[1.6rem] border border-white/55 bg-white/65 p-4">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium text-slate-800">
-                <span>Advanced sandbox controls</span>
-                <span className="rounded-full bg-slate-900 px-2 py-1 text-[11px] font-medium text-white transition group-open:rotate-180">
-                  +
-                </span>
-              </summary>
-
-              <div className="mt-5 space-y-5">
-                <div>
-                  <SectionEyebrow label="All Zone Offsets" />
-                  <div className="mt-3 space-y-4">
-                    {initial.blueprint.spaces.map((space) => (
-                      <div key={space.id}>
+                  return (
+                    <div key={space.id} className="rounded-[1.2rem] border border-slate-200/70 bg-white/72 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-medium text-slate-900">{space.name}</p>
+                        <span className="text-xs uppercase tracking-[0.18em] text-slate-400">{formatZoneLabel(space.id)}</span>
+                      </div>
+                      <div className="mt-4">
                         <label className="flex items-center justify-between text-sm font-medium text-slate-700">
-                          <span>{space.name}</span>
-                          <span className="font-mono text-slate-500">
-                            {(draftControls.zoneTemperatureOffsetsC[space.id] ?? 0).toFixed(1)}°C
-                          </span>
+                          <span>Target temperature</span>
+                          <span className="font-mono text-slate-500">{draftTargetTemperatureC.toFixed(1)}°C</span>
                         </label>
                         <input
                           type="range"
-                          min="-3"
-                          max="3"
+                          min={targetMin}
+                          max={targetMax}
                           step="0.1"
-                          value={draftControls.zoneTemperatureOffsetsC[space.id] ?? 0}
-                          onChange={(event) =>
+                          value={draftTargetTemperatureC}
+                          onChange={(event) => {
+                            const nextTargetC = Number(event.target.value);
                             setDraftControls((current) => ({
                               ...current,
                               zoneTemperatureOffsetsC: {
                                 ...current.zoneTemperatureOffsetsC,
-                                [space.id]: Number(event.target.value),
+                                [space.id]: clampNumber(nextTargetC - occupiedMidpoint, -3, 3),
                               },
-                            }))
-                          }
+                            }));
+                          }}
                           onPointerUp={() => commitZoneOffset(space.id)}
                           onTouchEnd={() => commitZoneOffset(space.id)}
                           onBlur={() => commitZoneOffset(space.id)}
@@ -947,19 +1106,403 @@ export function RuntimeShell({
                               commitZoneOffset(space.id);
                             }
                           }}
-                          className="mt-2 w-full accent-[#d9691f]"
+                          className="mt-3 w-full accent-[#d9691f]"
                         />
                       </div>
-                    ))}
-                  </div>
+                      <div className="mt-4">
+                        <label className="flex items-center justify-between text-sm font-medium text-slate-700">
+                          <span>CO₂ ceiling</span>
+                          <span className="font-mono text-slate-500">
+                            {(draftControls.zoneCo2SetpointsPpm[space.id] ?? space.comfort_targets.co2_limit_ppm).toFixed(0)} ppm
+                          </span>
+                        </label>
+                        <input
+                          type="range"
+                          min="700"
+                          max="1100"
+                          step="10"
+                          value={draftControls.zoneCo2SetpointsPpm[space.id] ?? space.comfort_targets.co2_limit_ppm}
+                          onChange={(event) =>
+                            setDraftControls((current) => ({
+                              ...current,
+                              zoneCo2SetpointsPpm: {
+                                ...current.zoneCo2SetpointsPpm,
+                                [space.id]: Number(event.target.value),
+                              },
+                            }))
+                          }
+                          onPointerUp={() => commitZoneCo2Setpoint(space.id)}
+                          onTouchEnd={() => commitZoneCo2Setpoint(space.id)}
+                          onBlur={() => commitZoneCo2Setpoint(space.id)}
+                          onKeyUp={(event) => {
+                            if (event.key === "Enter" || event.key.startsWith("Arrow")) {
+                              commitZoneCo2Setpoint(space.id);
+                            }
+                          }}
+                          className="mt-3 w-full accent-[#d9691f]"
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardBlock>
+
+            <CardBlock>
+              <SectionEyebrow label="Air Loop Command Desk" />
+              <p className="mt-3 text-sm leading-6 text-slate-600">
+                These are the manual facility-side trims the controller may use together with Belimo actuator feedback,
+                source telemetry, room CO₂ and the digital twin.
+              </p>
+              <div className="mt-4 space-y-5">
+                <div>
+                  <label className="flex items-center justify-between text-sm font-medium text-slate-700">
+                    <span>Supply air trim</span>
+                    <span className="font-mono text-slate-500">{draftControls.supplyTemperatureTrimC.toFixed(1)}°C</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="-4"
+                    max="4"
+                    step="0.1"
+                    value={draftControls.supplyTemperatureTrimC}
+                    onChange={(event) =>
+                      setDraftControls((current) => ({
+                        ...current,
+                        supplyTemperatureTrimC: Number(event.target.value),
+                      }))
+                    }
+                    onPointerUp={commitSupplyTemperatureTrim}
+                    onTouchEnd={commitSupplyTemperatureTrim}
+                    onBlur={commitSupplyTemperatureTrim}
+                    onKeyUp={(event) => {
+                      if (event.key === "Enter" || event.key.startsWith("Arrow")) {
+                        commitSupplyTemperatureTrim();
+                      }
+                    }}
+                    className="mt-3 w-full accent-[#d9691f]"
+                  />
                 </div>
 
                 <div>
+                  <label className="flex items-center justify-between text-sm font-medium text-slate-700">
+                    <span>Ventilation boost</span>
+                    <span className="font-mono text-slate-500">{draftControls.ventilationBoostPct.toFixed(0)}%</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="35"
+                    step="1"
+                    value={draftControls.ventilationBoostPct}
+                    onChange={(event) =>
+                      setDraftControls((current) => ({
+                        ...current,
+                        ventilationBoostPct: Number(event.target.value),
+                      }))
+                    }
+                    onPointerUp={commitVentilationBoost}
+                    onTouchEnd={commitVentilationBoost}
+                    onBlur={commitVentilationBoost}
+                    onKeyUp={(event) => {
+                      if (event.key === "Enter" || event.key.startsWith("Arrow")) {
+                        commitVentilationBoost();
+                      }
+                    }}
+                    className="mt-3 w-full accent-[#d9691f]"
+                  />
+                </div>
+              </div>
+            </CardBlock>
+
+            <details className="group rounded-[1.6rem] border border-white/55 bg-white/65 p-4">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium text-slate-800 marker:content-none [&::-webkit-details-marker]:hidden">
+                <div>
+                  <SectionEyebrow label="Sandbox Panel" />
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    Sandbox-only controls for weather, bias injection and fault simulation.
+                  </p>
+                </div>
+                <span className="rounded-full bg-slate-900 px-2 py-1 text-[11px] font-medium text-white transition group-open:rotate-180">
+                  +
+                </span>
+              </summary>
+
+              <div className="mt-5 space-y-5">
+                <CardBlock className="bg-white/75">
+                  <SectionEyebrow label="Bias Injection" />
+                  <div className="mt-4 space-y-5">
+                    <div>
+                      <label className="flex items-center justify-between text-sm font-medium text-slate-700">
+                        Occupancy bias
+                        <span className="font-mono text-slate-500">{draftControls.occupancyBias.toFixed(2)}x</span>
+                      </label>
+                      <input
+                        type="range"
+                        min="0.4"
+                        max="1.6"
+                        step="0.05"
+                        value={draftControls.occupancyBias}
+                        onChange={(event) =>
+                          setDraftControls((current) => ({
+                            ...current,
+                            occupancyBias: Number(event.target.value),
+                          }))
+                        }
+                        onPointerUp={commitOccupancyBias}
+                        onTouchEnd={commitOccupancyBias}
+                        onBlur={commitOccupancyBias}
+                        onKeyUp={(event) => {
+                          if (event.key === "Enter" || event.key.startsWith("Arrow")) {
+                            commitOccupancyBias();
+                          }
+                        }}
+                        className="mt-3 w-full accent-[#d9691f]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="flex items-center justify-between text-sm font-medium text-slate-700">
+                        Solar gain bias
+                        <span className="font-mono text-slate-500">{draftControls.solarGainBias.toFixed(2)}x</span>
+                      </label>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="1.75"
+                        step="0.05"
+                        value={draftControls.solarGainBias}
+                        onChange={(event) =>
+                          setDraftControls((current) => ({
+                            ...current,
+                            solarGainBias: Number(event.target.value),
+                          }))
+                        }
+                        onPointerUp={commitSolarGainBias}
+                        onTouchEnd={commitSolarGainBias}
+                        onBlur={commitSolarGainBias}
+                        onKeyUp={(event) => {
+                          if (event.key === "Enter" || event.key.startsWith("Arrow")) {
+                            commitSolarGainBias();
+                          }
+                        }}
+                        className="mt-3 w-full accent-[#d9691f]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="flex items-center justify-between text-sm font-medium text-slate-700">
+                        Plug load bias
+                        <span className="font-mono text-slate-500">{draftControls.plugLoadBias.toFixed(2)}x</span>
+                      </label>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="1.75"
+                        step="0.05"
+                        value={draftControls.plugLoadBias}
+                        onChange={(event) =>
+                          setDraftControls((current) => ({
+                            ...current,
+                            plugLoadBias: Number(event.target.value),
+                          }))
+                        }
+                        onPointerUp={commitPlugLoadBias}
+                        onTouchEnd={commitPlugLoadBias}
+                        onBlur={commitPlugLoadBias}
+                        onKeyUp={(event) => {
+                          if (event.key === "Enter" || event.key.startsWith("Arrow")) {
+                            commitPlugLoadBias();
+                          }
+                        }}
+                        className="mt-3 w-full accent-[#d9691f]"
+                      />
+                    </div>
+
+                    <div className="space-y-4">
+                      <SectionEyebrow label="Window States" />
+                      {initial.blueprint.spaces.map((space) => (
+                        <div key={space.id}>
+                          <label className="flex items-center justify-between text-sm font-medium text-slate-700">
+                            <span>{space.name}</span>
+                            <span className="font-mono text-slate-500">
+                              {Math.round((draftControls.windowOpenFractionByZone[space.id] ?? 0) * 100)}%
+                            </span>
+                          </label>
+                          <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={draftControls.windowOpenFractionByZone[space.id] ?? 0}
+                            onChange={(event) =>
+                              setDraftControls((current) => ({
+                                ...current,
+                                windowOpenFractionByZone: {
+                                  ...current.windowOpenFractionByZone,
+                                  [space.id]: Number(event.target.value),
+                                },
+                              }))
+                            }
+                            onPointerUp={() => commitWindowOpenFraction(space.id)}
+                            onTouchEnd={() => commitWindowOpenFraction(space.id)}
+                            onBlur={() => commitWindowOpenFraction(space.id)}
+                            onKeyUp={(event) => {
+                              if (event.key === "Enter" || event.key.startsWith("Arrow")) {
+                                commitWindowOpenFraction(space.id);
+                              }
+                            }}
+                            className="mt-2 w-full accent-[#d9691f]"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </CardBlock>
+
+                <CardBlock className="bg-white/75">
+                  <SectionEyebrow label="Weather Sandbox" />
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {(["live", "manual"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => void commitWeatherMode(mode)}
+                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                          runtime.manualControls.weatherMode === mode
+                            ? "bg-slate-950 text-white"
+                            : "bg-slate-200/70 text-slate-700 hover:bg-slate-300/80"
+                        }`}
+                      >
+                        {mode === "live" ? "St. Gallen live" : "Manual weather"}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-4 space-y-4">
+                    <WeatherSlider
+                      label="Outdoor temperature"
+                      value={draftControls.weatherOverride.temperatureC}
+                      min={-10}
+                      max={35}
+                      step={0.5}
+                      unit="°C"
+                      onChange={(value) =>
+                        setDraftControls((current) => ({
+                          ...current,
+                          weatherOverride: {
+                            ...current.weatherOverride,
+                            temperatureC: value,
+                          },
+                        }))
+                      }
+                      onCommit={commitWeatherOverride}
+                    />
+                    <WeatherSlider
+                      label="Relative humidity"
+                      value={draftControls.weatherOverride.relativeHumidityPct}
+                      min={15}
+                      max={100}
+                      step={1}
+                      unit="%"
+                      onChange={(value) =>
+                        setDraftControls((current) => ({
+                          ...current,
+                          weatherOverride: {
+                            ...current.weatherOverride,
+                            relativeHumidityPct: value,
+                          },
+                        }))
+                      }
+                      onCommit={commitWeatherOverride}
+                    />
+                    <WeatherSlider
+                      label="Wind speed"
+                      value={draftControls.weatherOverride.windSpeedMps}
+                      min={0}
+                      max={18}
+                      step={0.5}
+                      unit="m/s"
+                      onChange={(value) =>
+                        setDraftControls((current) => ({
+                          ...current,
+                          weatherOverride: {
+                            ...current.weatherOverride,
+                            windSpeedMps: value,
+                          },
+                        }))
+                      }
+                      onCommit={commitWeatherOverride}
+                    />
+                    <WeatherSlider
+                      label="Cloud cover"
+                      value={draftControls.weatherOverride.cloudCoverPct}
+                      min={0}
+                      max={100}
+                      step={1}
+                      unit="%"
+                      onChange={(value) =>
+                        setDraftControls((current) => ({
+                          ...current,
+                          weatherOverride: {
+                            ...current.weatherOverride,
+                            cloudCoverPct: value,
+                          },
+                        }))
+                      }
+                      onCommit={commitWeatherOverride}
+                    />
+                  </div>
+                </CardBlock>
+
+                <CardBlock className="bg-white/75">
+                  <SectionEyebrow label="Sandbox Time" />
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {sandboxTimeModeOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => void commitTimeMode(option.value)}
+                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                          runtime.manualControls.timeMode === option.value
+                            ? "bg-slate-950 text-white"
+                            : "bg-slate-200/70 text-slate-700 hover:bg-slate-300/80"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-slate-600">
+                    Virtual time accelerates the whole sandbox runtime and shortens the live tick cadence. This is not
+                    a preview simulation.
+                  </p>
+                  {draftControls.timeMode === "virtual" ? (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {sandboxTimeSpeedOptions.map((multiplier) => (
+                        <button
+                          key={multiplier}
+                          type="button"
+                          onClick={() => void commitTimeSpeedMultiplier(multiplier)}
+                          className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                            runtime.manualControls.timeMode === "virtual" &&
+                            runtime.manualControls.timeSpeedMultiplier === multiplier
+                              ? "bg-[#d9691f] text-white"
+                              : "bg-[#d9691f]/10 text-[#9d4511] hover:bg-[#d9691f]/18"
+                          }`}
+                        >
+                          {multiplier}x
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </CardBlock>
+
+                <CardBlock className="bg-white/75">
                   <div className="flex items-center justify-between">
                     <SectionEyebrow label="Fault Lab" />
-                    <span className="rounded-full bg-slate-950 px-2 py-1 text-[11px] font-medium text-white">Demo</span>
+                    <span className="rounded-full bg-slate-950 px-2 py-1 text-[11px] font-medium text-white">Sandbox only</span>
                   </div>
-                  <div className="mt-3 space-y-3">
+                  <div className="mt-4 space-y-3">
                     {initial.availableFaults.map((fault) => {
                       const activeMode = runtime.controls.faultOverrides[fault.id] ?? "auto";
 
@@ -977,7 +1520,7 @@ export function RuntimeShell({
                                     faultOverrides: {
                                       [fault.id]: mode,
                                     },
-                                  })
+                                  }, "sandbox")
                                 }
                                 className={`rounded-full px-3 py-1.5 text-xs font-medium ${
                                   activeMode === mode ? "bg-slate-950 text-white" : "bg-slate-200/70 text-slate-700"
@@ -991,116 +1534,10 @@ export function RuntimeShell({
                       );
                     })}
                   </div>
-                </div>
+                </CardBlock>
               </div>
             </details>
 
-            <CardBlock>
-              <SectionEyebrow label="Real Building" />
-              <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-slate-950">Connect Real Network</h2>
-              <p className="mt-3 text-sm leading-7 text-slate-600">
-                The live backend is already split the right way: same twin contract, same control path, different data
-                source. The real-building path just needs device networking and a blueprint upload in this schema.
-              </p>
-              <button
-                type="button"
-                className="mt-5 rounded-full border border-slate-300 bg-slate-100 px-5 py-3 text-sm font-medium text-slate-500"
-              >
-                Upload Blueprint + Connect Devices
-              </button>
-            </CardBlock>
-
-            <CardBlock>
-              <SectionEyebrow label="Belimo Brain Control Plan" />
-              <div className="mt-4 space-y-3">
-                {activeControlPolicies.length === 0 ? (
-                  <div className="rounded-2xl border border-slate-200/70 bg-white/75 px-4 py-3 text-sm text-slate-600">
-                    No scheduled or policy-driven control overrides are active right now. The runtime is following the
-                    stored manual control layer.
-                  </div>
-                ) : (
-                  activeControlPolicies.map((policy) => (
-                    <ActivePolicyCard key={policy.id} initial={initial} policy={policy} />
-                  ))
-                )}
-              </div>
-            </CardBlock>
-
-            <CardBlock>
-              <SectionEyebrow label="Belimo Brain Memory" />
-              <div className="mt-4 space-y-3">
-                {visibleBrainPolicies.length === 0 ? (
-                  <div className="rounded-2xl border border-slate-200/70 bg-white/75 px-4 py-3 text-sm text-slate-600">
-                    No persistent operator policies stored yet. Ask Belimo Brain to remember schedules, comfort targets,
-                    or energy preferences.
-                  </div>
-                ) : (
-                  visibleBrainPolicies.map((policy) => (
-                    <div key={policy.id} className="rounded-2xl border border-slate-200/70 bg-white/75 p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-medium text-slate-900">{policy.summary}</p>
-                        <span
-                          className={`rounded-full px-2 py-1 text-[11px] font-medium ${
-                            policy.importance === "requirement"
-                              ? "bg-[#d9691f]/15 text-[#a24710]"
-                              : "bg-slate-900/8 text-slate-700"
-                          }`}
-                        >
-                          {policy.importance === "requirement" ? "Required" : "Preference"}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">
-                        {formatPolicyScopeLabel(policy, initial)} • {formatModeLabel(policy.policyType)}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-600">{formatPolicyScheduleLabel(policy)}</p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </CardBlock>
-
-            <details className="mt-auto group rounded-[1.6rem] border border-white/55 bg-white/65 p-4">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 marker:content-none [&::-webkit-details-marker]:hidden">
-                <span className="text-sm font-medium text-slate-800">Sandbox settings</span>
-                <span className="rounded-full bg-slate-950 px-2 py-1 text-[11px] font-medium text-white transition group-open:rotate-180">
-                  +
-                </span>
-              </summary>
-
-              <div className="mt-5">
-                <label className="flex items-center justify-between text-sm font-medium text-slate-700">
-                  Occupancy bias
-                  <span className="font-mono text-slate-500">{draftControls.occupancyBias.toFixed(2)}x</span>
-                </label>
-                <input
-                  type="range"
-                  min="0.4"
-                  max="1.6"
-                  step="0.05"
-                  value={draftControls.occupancyBias}
-                  onChange={(event) =>
-                    setDraftControls((current) => ({
-                      ...current,
-                      occupancyBias: Number(event.target.value),
-                    }))
-                  }
-                  onPointerUp={commitOccupancyBias}
-                  onTouchEnd={commitOccupancyBias}
-                  onBlur={commitOccupancyBias}
-                  onKeyUp={(event) => {
-                    if (event.key === "Enter" || event.key.startsWith("Arrow")) {
-                      commitOccupancyBias();
-                    }
-                  }}
-                  className="mt-3 w-full accent-[#d9691f]"
-                />
-                {runtime.controls.occupancyBias !== runtime.manualControls.occupancyBias ? (
-                  <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-400">
-                    Applied now {runtime.controls.occupancyBias.toFixed(2)}x from Belimo Brain policy resolution
-                  </p>
-                ) : null}
-              </div>
-            </details>
           </aside>
 
           <section
@@ -1110,17 +1547,22 @@ export function RuntimeShell({
               <RuntimeScene
                 blueprint={initial.blueprint}
                 products={initial.products}
-                twin={deferredRuntime.twin}
-                sandbox={deferredRuntime.sandbox}
+                twin={displayedTwin}
+                sandbox={displayedSandbox}
                 leftDrawerOpen={isLeftDrawerOpen}
                 rightDrawerOpen={isRightDrawerOpen}
                 selectedZoneId={selectedZoneId}
                 showSelectedZoneBadge={isRightDrawerOpen && inspectView === "zone"}
-                worstZoneId={deferredRuntime.twin?.summary.worstZoneId ?? null}
+                worstZoneId={displayedTwin?.summary.worstZoneId ?? null}
                 onSelectZone={handleZoneSelection}
                 onSelectDevice={handleDeviceSelection}
-                totalAirflowM3H={totalAirflow}
-                sourcePowerKw={sourcePower}
+                totalAirflowM3H={displayedTotalAirflow}
+                sourcePowerKw={displayedSourcePower}
+                simulationPreview={simulationPreview}
+                simulationActive={isSimulationActive}
+                simulationMinute={simulationMinute}
+                timeMode={deferredRuntime.controls.timeMode}
+                timeSpeedMultiplier={deferredRuntime.controls.timeSpeedMultiplier}
                 onReturnToPortfolio={onReturnToPortfolio}
               />
             </div>
@@ -1524,52 +1966,6 @@ function DrawerToggle({
   );
 }
 
-function ActivePolicyCard({
-  initial,
-  policy,
-}: {
-  initial: RuntimeBootstrapPayload;
-  policy: ActiveControlPolicy;
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200/70 bg-white/75 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-medium text-slate-900">{policy.summary}</p>
-        <span
-          className={`rounded-full px-2 py-1 text-[11px] font-medium ${
-            policy.importance === "requirement" ? "bg-[#d9691f]/15 text-[#a24710]" : "bg-slate-900/8 text-slate-700"
-          }`}
-        >
-          {policy.importance === "requirement" ? "Required" : "Preference"}
-        </span>
-      </div>
-      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">
-        {policy.scopeType === "zone" && policy.scopeId
-          ? initial.blueprint.spaces.find((space) => space.id === policy.scopeId)?.name ?? policy.scopeId
-          : initial.blueprint.building.name}{" "}
-        • {formatModeLabel(policy.policyType)}
-      </p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        {policy.appliedControlPaths.map((path) => (
-          <span
-            key={`${policy.id}-${path}`}
-            className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-600"
-          >
-            {formatAppliedControlPath(path, initial)}
-          </span>
-        ))}
-      </div>
-      <p className="mt-3 text-sm text-slate-600">
-        {policy.schedule
-          ? `${policy.schedule.daysOfWeek
-              .map((day) => day.charAt(0).toUpperCase() + day.slice(1))
-              .join(", ")} ${policy.schedule.startLocalTime}-${policy.schedule.endLocalTime}`
-          : "Always active"}
-      </p>
-    </div>
-  );
-}
-
 function FloatingDrawerHandle({
   side,
   isOpen,
@@ -1695,6 +2091,55 @@ function DetailPill({ label, value }: { label: string; value: string }) {
     <div className="rounded-[1.15rem] border border-slate-200/70 bg-white/75 px-4 py-3">
       <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-500">{label}</p>
       <p className="mt-2 text-base font-semibold text-slate-950">{value}</p>
+    </div>
+  );
+}
+
+function WeatherSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  unit,
+  onChange,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  unit: string;
+  onChange: (value: number) => void;
+  onCommit: () => void;
+}) {
+  return (
+    <div>
+      <label className="flex items-center justify-between text-sm font-medium text-slate-700">
+        <span>{label}</span>
+        <span className="font-mono text-slate-500">
+          {value.toFixed(step < 1 ? 1 : 0)}
+          {unit}
+        </span>
+      </label>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        onPointerUp={onCommit}
+        onTouchEnd={onCommit}
+        onBlur={onCommit}
+        onKeyUp={(event) => {
+          if (event.key === "Enter" || event.key.startsWith("Arrow")) {
+            onCommit();
+          }
+        }}
+        className="mt-3 w-full accent-[#d9691f]"
+      />
     </div>
   );
 }

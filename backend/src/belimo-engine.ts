@@ -295,8 +295,13 @@ export class BelimoEngine {
         metrics.motor_torque_nmm = round(torqueNmm, 2);
         metrics.motor_power_w = round(powerW, 3);
         metrics.obstruction_risk_pct = round(highEffortRisk);
+        const stalledAgainstCommand =
+          trackingError > 12 &&
+          setpoint >= 90 &&
+          feedback <= setpoint - 10 &&
+          powerW <= 0.12;
 
-        if (highEffortRisk > 58) {
+        if (highEffortRisk > 58 || stalledAgainstCommand) {
           alerts.push("Mechanical obstruction suspected");
           healthScore -= 40;
         } else if (trackingError > 10 && powerW > 0.3) {

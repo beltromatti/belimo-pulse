@@ -47,9 +47,28 @@ const deviceHistoryQuerySchema = historyQuerySchema.extend({
 
 const controlSchema = z.object({
   actor: z.string().min(1).default("frontend-ui"),
+  controlScope: z.enum(["facility", "sandbox"]).default("facility"),
   sourceModePreference: z.enum(["auto", "ventilation", "cooling", "heating", "economizer"]).optional(),
+  zoneCo2SetpointsPpm: z.record(z.string(), z.number().min(650).max(1200)).optional(),
+  supplyTemperatureTrimC: z.number().min(-4).max(4).optional(),
+  ventilationBoostPct: z.number().min(0).max(35).optional(),
   occupancyBias: z.number().min(0.4).max(1.6).optional(),
   zoneTemperatureOffsetsC: z.record(z.string(), z.number().min(-3).max(3)).optional(),
+  windowOpenFractionByZone: z.record(z.string(), z.number().min(0).max(1)).optional(),
+  weatherMode: z.enum(["live", "manual"]).optional(),
+  timeMode: z.enum(["live", "virtual"]).optional(),
+  timeSpeedMultiplier: z.union([z.literal(1), z.literal(2), z.literal(5), z.literal(10)]).optional(),
+  weatherOverride: z
+    .object({
+      temperatureC: z.number().min(-25).max(42).optional(),
+      relativeHumidityPct: z.number().min(5).max(100).optional(),
+      windSpeedMps: z.number().min(0).max(30).optional(),
+      windDirectionDeg: z.number().min(0).max(360).optional(),
+      cloudCoverPct: z.number().min(0).max(100).optional(),
+    })
+    .optional(),
+  solarGainBias: z.number().min(0.5).max(1.75).optional(),
+  plugLoadBias: z.number().min(0.5).max(1.75).optional(),
   faultOverrides: z
     .record(z.string(), z.enum(["auto", "forced_on", "forced_off"]))
     .optional(),
@@ -70,6 +89,7 @@ async function bootstrap() {
     productsCatalog.products,
     sandboxGateway,
     belimoEngine,
+    sandboxEngine,
     sandboxEngine.getTickSeconds() * 1000,
   );
 
@@ -229,9 +249,22 @@ async function bootstrap() {
         sourceModePreference: payload.sourceModePreference,
         occupancyBias: payload.occupancyBias,
         zoneTemperatureOffsetsC: payload.zoneTemperatureOffsetsC,
+        zoneCo2SetpointsPpm: payload.zoneCo2SetpointsPpm,
+        supplyTemperatureTrimC: payload.supplyTemperatureTrimC,
+        ventilationBoostPct: payload.ventilationBoostPct,
         faultOverrides: payload.faultOverrides,
+        windowOpenFractionByZone: payload.windowOpenFractionByZone,
+        weatherMode: payload.weatherMode,
+        timeMode: payload.timeMode,
+        timeSpeedMultiplier: payload.timeSpeedMultiplier,
+        weatherOverride: payload.weatherOverride,
+        solarGainBias: payload.solarGainBias,
+        plugLoadBias: payload.plugLoadBias,
       },
       payload.actor,
+      {
+        triggerSimulationPreview: payload.controlScope === "facility",
+      },
     );
 
     response.status(200).json({
@@ -239,6 +272,7 @@ async function bootstrap() {
       controls: result.controls,
       manualControls: result.manualControls,
       controlResolution: result.controlResolution,
+      simulationPreview: result.simulationPreview,
     });
   });
 
@@ -473,12 +507,20 @@ async function bootstrap() {
     }
   });
 
+  const unsubscribeSimulationPreview = platform.onSimulationPreview((preview) => {
+    broadcastSocketMessage({
+      type: "simulation_preview",
+      payload: preview,
+    });
+  });
+
   server.listen(env.PORT, env.HOST, () => {
     console.log(`Belimo Pulse backend listening on http://${env.HOST}:${env.PORT}`);
   });
 
   const shutdown = async () => {
     unsubscribe();
+    unsubscribeSimulationPreview();
     unsubscribeBelimoBrainAlerts();
     wss.close();
     await platform.stop();

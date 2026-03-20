@@ -269,6 +269,7 @@ export async function executeBrainTool(
       const result = await platform.updateControls(
         { zoneTemperatureOffsetsC: { [zoneId]: offsetC } },
         "belimo-brain",
+        { triggerSimulationPreview: true },
       );
 
       return {
@@ -281,7 +282,11 @@ export async function executeBrainTool(
 
     case "set_facility_mode": {
       const mode = String(args.mode) as "auto" | "ventilation" | "cooling" | "heating" | "economizer";
-      const result = await platform.updateControls({ sourceModePreference: mode }, "belimo-brain");
+      const result = await platform.updateControls(
+        { sourceModePreference: mode },
+        "belimo-brain",
+        { triggerSimulationPreview: true },
+      );
 
       return {
         success: true,
@@ -296,6 +301,7 @@ export async function executeBrainTool(
       const result = await platform.updateControls(
         { faultOverrides: { [faultId]: mode } },
         "belimo-brain",
+        { triggerSimulationPreview: false },
       );
 
       return {
