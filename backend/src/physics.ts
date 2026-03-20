@@ -126,7 +126,9 @@ export function computeZoneTemperatureStep(input: ZoneMassBalanceInput) {
   const mDotSupply = (input.supplyAirflowM3H / 3600) * AIR_DENSITY_KG_PER_M3;
   const infiltrationM3PerS = (input.zoneVolumeM3 * input.infiltrationAch) / 3600;
   const mDotInfiltration = infiltrationM3PerS * AIR_DENSITY_KG_PER_M3;
-  const capacitanceJPerK = input.thermalCapacitanceKjPerK * 1000;
+  // Only a fraction of the full envelope thermal mass participates on the 20–30 minute control horizon.
+  const activeControlHorizonCapacitanceFactor = 0.4;
+  const capacitanceJPerK = input.thermalCapacitanceKjPerK * 1000 * activeControlHorizonCapacitanceFactor;
   const envelopeHeatW = input.uaWPerK * (input.outdoorTemperatureC - input.zoneTemperatureC);
   const supplyHeatW = mDotSupply * AIR_HEAT_CAPACITY_J_PER_KG_K * (input.supplyTemperatureC - input.zoneTemperatureC);
   const infiltrationHeatW =
@@ -218,7 +220,8 @@ export function computeStaticPressurePa(fanSpeedPct: number, totalFlowM3H: numbe
   const availableStatic = 1100 * normalizedFan * normalizedFan;
   const ductDrop = 120 * normalizedFlow * normalizedFlow;
   const filterDrop = 45 + 140 * filterFactor;
-  return Math.max(25, availableStatic - ductDrop - filterDrop);
+  // The supply fan VFD maintains a bounded duct static reset band in normal operation.
+  return clamp(availableStatic - ductDrop - filterDrop, 120, 650);
 }
 
 export function computeFilterLoading(runtimeHours: number, progressiveFaultSeverity: number, hoursToFullScale = 300) {

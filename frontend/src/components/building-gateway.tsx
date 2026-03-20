@@ -5,12 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 
 import { BrandLockup } from "@/components/brand-lockup";
 import { RuntimeShell } from "@/components/runtime-shell";
-import { BrainAlert, OperatorPolicy, RuntimeBootstrapPayload } from "@/lib/runtime-types";
+import { RuntimeBootstrapPayload } from "@/lib/runtime-types";
 
 type BuildingGatewayProps = {
   initial: RuntimeBootstrapPayload;
-  initialBrainAlerts?: BrainAlert[];
-  initialBrainPolicies?: OperatorPolicy[];
   websocketUrl: string;
   initialSelectedBuildingId?: string;
   initialView?: "portfolio" | "dashboard";
@@ -511,8 +509,6 @@ function GatewayConnectionErrorModal({
 
 export function BuildingGateway({
   initial,
-  initialBrainAlerts,
-  initialBrainPolicies,
   websocketUrl,
   initialSelectedBuildingId,
   initialView = "portfolio",
@@ -532,8 +528,8 @@ export function BuildingGateway({
         location: "St. Gallen, Switzerland",
         summary:
           activeAlerts === 0
-            ? "Building brain: comfort stable across all zones, no active anomalies detected."
-            : `${activeAlerts} active alert${activeAlerts === 1 ? "" : "s"} currently detected by the building brain.`,
+            ? "Digital twin and control runtime are stable across all zones with no active anomalies detected."
+            : `${activeAlerts} active alert${activeAlerts === 1 ? "" : "s"} currently detected by the digital twin diagnostics.`,
         statusLabel: activeAlerts === 0 ? "Sandbox live" : `${activeAlerts} alerts`,
         statusTone: activeAlerts === 0 ? "healthy" : "warning",
         airFlowM3H: airFlow,
@@ -547,7 +543,7 @@ export function BuildingGateway({
         id: "zurich-campus-west",
         name: "Zurich Campus West",
         location: "Zurich, Switzerland",
-        summary: "No active alerts currently detected by the building brain.",
+        summary: "No active alerts currently detected by the digital twin diagnostics.",
         statusLabel: "Operational",
         statusTone: "healthy",
         airFlowM3H: 6840,
@@ -561,7 +557,7 @@ export function BuildingGateway({
         id: "basel-logistics-hub",
         name: "Basel Logistics Hub",
         location: "Basel, Switzerland",
-        summary: "1 critical alert currently detected by the building brain.",
+        summary: "1 critical alert currently detected by the digital twin diagnostics.",
         statusLabel: "Critical alert",
         statusTone: "warning",
         airFlowM3H: 7920,
@@ -634,8 +630,6 @@ export function BuildingGateway({
     return (
       <RuntimeShell
         initial={initial}
-        initialBrainAlerts={initialBrainAlerts}
-        initialBrainPolicies={initialBrainPolicies}
         websocketUrl={websocketUrl}
         onReturnToPortfolio={() => setHasEntered(false)}
       />

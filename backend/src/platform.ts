@@ -531,7 +531,7 @@ export class BelimoPlatform {
       });
     const horizonMinutes =
       trigger === "facility_manual_change"
-        ? 20
+        ? Math.max(20, Math.min(30, assessment.horizonMinutes))
         : Math.max(trigger === "fault_detected" ? 30 : 15, assessment.horizonMinutes);
     const accelerationFactor = 100;
     const playbackDurationMs = Math.round((horizonMinutes * 60 * 1000) / accelerationFactor);

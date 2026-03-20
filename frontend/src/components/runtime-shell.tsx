@@ -13,13 +13,11 @@ import {
 } from "react";
 
 import {
-  BrainAlert,
   DeviceDefinition,
   DeviceDiagnosis,
   DeviceTelemetryRecord,
   FacilityModePreference,
   FaultOverrideMode,
-  OperatorPolicy,
   ProductDefinition,
   RuntimeBootstrapPayload,
   RuntimeControlState,
@@ -28,7 +26,6 @@ import {
   ZoneTwinState,
 } from "@/lib/runtime-types";
 import { BrandLockup } from "@/components/brand-lockup";
-import { ChatPanel } from "@/components/chat-panel";
 import { ProductModelPreview } from "@/components/product-model-preview";
 
 const RuntimeScene = dynamic(
@@ -38,8 +35,6 @@ const RuntimeScene = dynamic(
 
 type RuntimeShellProps = {
   initial: RuntimeBootstrapPayload;
-  initialBrainAlerts?: BrainAlert[];
-  initialBrainPolicies?: OperatorPolicy[];
   websocketUrl: string;
   onReturnToPortfolio?: () => void;
 };
@@ -282,12 +277,9 @@ function getSourceReading(readings: DeviceTelemetryRecord[] | undefined) {
 
 export function RuntimeShell({
   initial,
-  initialBrainAlerts,
-  initialBrainPolicies: _initialBrainPolicies,
   websocketUrl,
   onReturnToPortfolio,
 }: RuntimeShellProps) {
-  const drawerDockOffset = "calc(1.5rem + min(23rem, calc(100vw - 1.5rem)) + 0.75rem)";
   const [runtime, setRuntime] = useState<RuntimeState>({
     twin: initial.latestTwinSnapshot,
     sandbox: initial.latestSandboxBatch,
@@ -303,8 +295,6 @@ export function RuntimeShell({
   );
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
-  const [brainAlerts, setBrainAlerts] = useState<BrainAlert[]>(initialBrainAlerts ?? []);
-  const [, setBrainPolicies] = useState<OperatorPolicy[]>(_initialBrainPolicies ?? []);
   const [simulationPreview, setSimulationPreview] = useState<RuntimeSimulationPreview | null>(
     initial.latestSimulationPreview,
   );
@@ -571,13 +561,12 @@ export function RuntimeShell({
       return;
     }
 
-    if (message.type === "brain_alert") {
-      setBrainAlerts((prev) => [...prev.slice(-19), message.payload]);
+    if (message.type === "simulation_preview") {
+      setSimulationPreview(message.payload);
       return;
     }
 
-    if (message.type === "simulation_preview") {
-      setSimulationPreview(message.payload);
+    if (message.type === "brain_alert") {
       return;
     }
 
@@ -993,7 +982,7 @@ export function RuntimeShell({
                 </div>
                 <p className="mt-4 text-sm leading-6 text-slate-600">
                   Raw telemetry, twin-derived zone states, device diagnoses and per-tick control context are persisted
-                  for future Belimo Brain analysis. Last archived frame:{" "}
+                  for runtime history and downstream analytics. Last archived frame:{" "}
                   {persistenceSummary.lastPersistedObservedAt
                     ? formatZurichTime(persistenceSummary.lastPersistedObservedAt)
                     : "not yet"}
@@ -1895,7 +1884,7 @@ export function RuntimeShell({
               </div>
               <p className="mt-4 text-sm leading-6 text-slate-600">
                 Raw telemetry, twin-derived zone states, device diagnoses and per-tick control context are persisted for
-                future Belimo Brain analysis. Last archived frame:{" "}
+                runtime history and downstream analytics. Last archived frame:{" "}
                 {persistenceSummary.lastPersistedObservedAt
                   ? formatZurichTime(persistenceSummary.lastPersistedObservedAt)
                   : "not yet"}
@@ -1912,17 +1901,6 @@ export function RuntimeShell({
         </section>
       </div>
     </main>
-    <ChatPanel
-      alerts={brainAlerts}
-      rightOffset={isRightDrawerOpen ? drawerDockOffset : "1.5rem"}
-      onDismissAlert={(alertId) => {
-        setBrainAlerts((prev) => prev.filter((a) => a.id !== alertId));
-        fetch(`/api/brain/alerts/${alertId}/dismiss`, { method: "POST" }).catch(() => {});
-      }}
-      onPoliciesSync={(policies) => {
-        setBrainPolicies(policies);
-      }}
-    />
   </>
   );
 }

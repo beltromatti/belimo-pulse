@@ -422,7 +422,8 @@ export class SandboxDataGenerationEngine {
     const activeObstructionPenalty = this.getFaultSeverity("mechanical_obstruction_inside_damper_or_actuator");
     const ventilationAssist = this.controlState.ventilationBoostPct;
     let maxAirflowShortageRatio = 0;
-    const demandSignal = clamp(averageDemand * 0.54 + maxDemand * 0.34, 0, 1.16);
+    let maxZoneDamperPositionPct = 0;
+    const demandSignal = clamp(averageDemand * 0.48 + maxDemand * 0.28, 0, 1.05);
     const baseFanFloorPct = fanRange[0] + 2;
     const supplyFanSpeedPct = clamp(
       fanRange[0] +
@@ -453,6 +454,8 @@ export class SandboxDataGenerationEngine {
       const projectedTemperatureC = zone.temperatureC + memory.temperatureSlopeCPerMin * 10;
       const designFlow = this.getPrimaryActuatorForZone(space.id)?.design.design_airflow_m3_h ?? 0;
       const minimumFlow = designFlow * clamp((occupied ? 0.56 : 0.18) + ventilationAssist / 100 * 0.12, 0.18, 0.76);
+      const branchActuator = this.getPrimaryActuatorForZone(space.id);
+      const branchFeedbackPct = branchActuator ? this.runtimeState.actuators.get(branchActuator.id)?.feedbackPct ?? 0 : 0;
       maxWarmErrorC = Math.max(maxWarmErrorC, zone.temperatureC - targetMidpoint, projectedTemperatureC - targetMidpoint);
       maxColdErrorC = Math.max(maxColdErrorC, targetMidpoint - zone.temperatureC, targetMidpoint - projectedTemperatureC);
       maxCo2ExcessPpm = Math.max(maxCo2ExcessPpm, zone.co2Ppm - co2Target, zone.co2Ppm + memory.co2SlopePpmPerMin * 10 - co2Target);
@@ -460,6 +463,7 @@ export class SandboxDataGenerationEngine {
         maxAirflowShortageRatio,
         designFlow > 0 ? clamp((minimumFlow - zone.supplyAirflowM3H) / designFlow, 0, 0.55) : 0,
       );
+      maxZoneDamperPositionPct = Math.max(maxZoneDamperPositionPct, branchFeedbackPct);
     }
 
     let sourceMode: SandboxSourceMode = "ventilation";
@@ -483,7 +487,7 @@ export class SandboxDataGenerationEngine {
       (outdoorTemperatureC < 12 && maxColdErrorC > 0.08)
     ) {
       sourceMode = "heating";
-      supplyTemperatureSetpointC = clamp(lerp(22, 31.5, clamp(maxColdErrorC / 2.8, 0, 1)) + trimC, 20, 33);
+      supplyTemperatureSetpointC = clamp(lerp(23.5, 32.5, clamp(maxColdErrorC / 2.1, 0, 1)) + trimC, 21, 33.5);
     } else if (
       this.controlState.sourceModePreference === "economizer" ||
       (outdoorTemperatureC < this.blueprint.control_profiles.air_loop_design.economizer_lockout_temperature_c &&
@@ -523,8 +527,20 @@ export class SandboxDataGenerationEngine {
     if (sourceMode === "heating") {
       const assistHeatingOutdoorFloor =
         activeAssistPlan && activeAssistPlan.outdoorAirBias < 0 ? Math.max(0.12, minOutdoor - 0.08) : minOutdoor;
-      supplyTemperatureSetpointC = clamp(supplyTemperatureSetpointC, 20, activeAssistPlan ? 34.5 : 33);
+      const dischargeLiftC = this.runtimeState.supplyTemperatureC - averageZoneTemp;
+      const dischargeReadiness = clamp((dischargeLiftC - 1.4) / 4.8, 0, 1);
+      const coldSeverity = clamp(maxColdErrorC / 2.6, 0, 1);
+      const preheatLiftC = (1 - dischargeReadiness) * (1.6 + coldSeverity * 1.2);
+      const readinessFanCapPct = lerp(baseFanFloorPct + 12 + coldSeverity * 8, fanRange[1], dischargeReadiness);
+      supplyTemperatureSetpointC = clamp(
+        supplyTemperatureSetpointC + preheatLiftC,
+        20,
+        activeAssistPlan ? 35.5 : 31,
+      );
       outdoorAirFraction = clamp(outdoorAirFraction, assistHeatingOutdoorFloor, 0.4);
+      if (maxCo2ExcessPpm < 80) {
+        resolvedSupplyFanSpeedPct = Math.min(resolvedSupplyFanSpeedPct, readinessFanCapPct);
+      }
     } else if (sourceMode === "cooling") {
       supplyTemperatureSetpointC = clamp(supplyTemperatureSetpointC, 13.2, 20);
       outdoorAirFraction = clamp(outdoorAirFraction, minOutdoor, 0.72);
@@ -536,16 +552,25 @@ export class SandboxDataGenerationEngine {
       outdoorAirFraction = clamp(outdoorAirFraction, minOutdoor, 0.7);
     }
 
+    const staticResetTrimPct =
+      maxAirflowShortageRatio >= 0.08 || maxZoneDamperPositionPct >= 93 || maxCo2ExcessPpm >= 80
+        ? 0
+        : clamp((90 - maxZoneDamperPositionPct) * 0.28, 0, 10);
+
     return {
       sourceMode,
       supplyTemperatureSetpointC,
-      supplyFanSpeedPct: clamp(resolvedSupplyFanSpeedPct, baseFanFloorPct, fanRange[1]),
+      supplyFanSpeedPct: clamp(resolvedSupplyFanSpeedPct - staticResetTrimPct, baseFanFloorPct, fanRange[1]),
       outdoorAirFraction,
-      damperCommands: this.computeDamperCommands(zoneDemand, activeAssistPlan),
+      damperCommands: this.computeDamperCommands(zoneDemand, activeAssistPlan, sourceMode),
     };
   }
 
-  private computeDamperCommands(zoneDemand: Record<string, number>, activeAssistPlan: SandboxAssistPlan | null) {
+  private computeDamperCommands(
+    zoneDemand: Record<string, number>,
+    activeAssistPlan: SandboxAssistPlan | null,
+    sourceMode: SandboxSourceMode,
+  ) {
     const commands: Record<string, number> = {
       "oa-damper-1": round(this.runtimeState.outdoorAirFraction * 100),
       "ra-damper-1": round((1 - this.runtimeState.outdoorAirFraction) * 100),
@@ -559,8 +584,42 @@ export class SandboxDataGenerationEngine {
         continue;
       }
 
+      const zone = this.runtimeState.zones.get(servedZoneId);
+      const space = this.spaceById.get(servedZoneId);
+      const occupied = (zone?.occupancyCount ?? 0) > 0;
+      const targetBand = occupied
+        ? space?.comfort_targets.occupied_temperature_band_c
+        : space?.comfort_targets.unoccupied_temperature_band_c;
+      const targetMidpoint =
+        targetBand && zone
+          ? (targetBand[0] + targetBand[1]) / 2 + this.getZoneTemperatureOffset(servedZoneId)
+          : 22;
+      const zoneTempErrorC = zone ? zone.temperatureC - targetMidpoint : 0;
+      const modeConflictTrimPct =
+        sourceMode === "cooling" || sourceMode === "economizer"
+          ? zoneTempErrorC < -0.18
+            ? clamp(Math.abs(zoneTempErrorC) * 18 + 5, 5, 28)
+            : 0
+          : sourceMode === "heating"
+            ? zoneTempErrorC > 0.18
+              ? clamp(Math.abs(zoneTempErrorC) * 16 + 4, 4, 24)
+              : 0
+            : 0;
+      const modeSupportBoostPct =
+        sourceMode === "cooling" || sourceMode === "economizer"
+          ? zoneTempErrorC > 0.22
+            ? clamp(zoneTempErrorC * 5, 0, 8)
+            : 0
+          : sourceMode === "heating"
+            ? zoneTempErrorC < -0.22
+              ? clamp(Math.abs(zoneTempErrorC) * 5.5, 0, 9)
+              : 0
+            : 0;
+
       commands[device.id] = clamp(
         computeZoneActuatorCommand(device.product_id, zoneDemand[servedZoneId]) +
+          modeSupportBoostPct -
+          modeConflictTrimPct +
           (activeAssistPlan?.zoneDamperBiasPct[servedZoneId] ?? 0),
         5,
         100,

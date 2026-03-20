@@ -16,7 +16,7 @@ function getSearchParamValue(value: string | string[] | undefined) {
 }
 
 export default async function Home({ searchParams }: HomeProps) {
-  const { bootstrap, brainAlerts, brainPolicies, websocketUrl } = await fetchRuntimeBootstrap();
+  const { bootstrap, websocketUrl } = await fetchRuntimeBootstrap();
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const initialSelectedBuildingId = getSearchParamValue(resolvedSearchParams.building);
   const initialView = getSearchParamValue(resolvedSearchParams.view) === "dashboard" ? "dashboard" : "portfolio";
@@ -24,8 +24,6 @@ export default async function Home({ searchParams }: HomeProps) {
   return (
     <BuildingGateway
       initial={bootstrap}
-      initialBrainAlerts={brainAlerts}
-      initialBrainPolicies={brainPolicies}
       websocketUrl={websocketUrl}
       initialSelectedBuildingId={initialSelectedBuildingId}
       initialView={initialView}

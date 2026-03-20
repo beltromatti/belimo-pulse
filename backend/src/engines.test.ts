@@ -955,7 +955,7 @@ test("simulation refinement improves cold-drift recovery under extreme weather w
   assert.ok(refinedOffice);
   assert.ok(baseScore.totalScore < noPlanScore.totalScore);
   assert.ok(refinedScore.totalScore <= baseScore.totalScore);
-  assert.ok(Math.abs(refinedOffice.temperatureC - openOfficeTargetC) <= 1);
+  assert.ok(Math.abs(refinedOffice.temperatureC - openOfficeTargetC) <= 0.6);
 
   sandbox.setAssistPlan(refinedScore.totalScore < baseScore.totalScore ? refinedPlan : basePlan);
   const liveTwin = new BelimoEngine(blueprint, products);
@@ -972,7 +972,154 @@ test("simulation refinement improves cold-drift recovery under extreme weather w
   const liveOffice = liveSnapshot.zones.find((zone) => zone.zoneId === "open_office");
 
   assert.ok(liveOffice);
-  assert.ok(Math.abs(liveOffice.temperatureC - openOfficeTargetC) <= 1.1);
+  assert.ok(Math.abs(liveOffice.temperatureC - openOfficeTargetC) <= 0.6);
+});
+
+test("sandbox-only disturbances are recovered back to the facility target within the target horizon", async () => {
+  const { blueprint, truth, products } = createSandboxEngine({
+    disableNoise: true,
+    disableFaults: true,
+  });
+  const sandbox = new SandboxDataGenerationEngine(
+    blueprint,
+    structuredClone(truth),
+    products,
+    createWeatherService({
+      temperatureC: 4,
+      relativeHumidityPct: 78,
+      windSpeedMps: 3.2,
+      windDirectionDeg: 30,
+      cloudCoverPct: 82,
+    }),
+  );
+  const twin = new BelimoEngine(blueprint, products);
+  const recentSnapshots: Array<Pick<TwinSnapshot, "observedAt" | "zones">> = [];
+  const openOfficeTargetC = 25.2;
+  const occupiedMidpoint = 22.75;
+  let now = new Date("2026-03-19T08:00:00+01:00");
+  let latestBatch: Awaited<ReturnType<SandboxDataGenerationEngine["tick"]>> | null = null;
+  let latestSnapshot: TwinSnapshot | null = null;
+
+  sandbox.updateControls({
+    weatherMode: "manual",
+    weatherOverride: {
+      temperatureC: 4,
+      relativeHumidityPct: 78,
+      windSpeedMps: 3.2,
+      windDirectionDeg: 30,
+      cloudCoverPct: 82,
+    },
+    zoneTemperatureOffsetsC: {
+      open_office: openOfficeTargetC - occupiedMidpoint,
+    },
+  });
+
+  for (let tick = 0; tick < 360; tick += 1) {
+    latestBatch = await sandbox.tick(now);
+    latestSnapshot = twin.ingest(latestBatch);
+    now = new Date(now.getTime() + truth.runtime.simulation_timestep_s * 1000);
+  }
+
+  sandbox.updateControls({
+    windowOpenFractionByZone: {
+      open_office: 0.8,
+    },
+  });
+
+  for (let tick = 0; tick < 180; tick += 1) {
+    latestBatch = await sandbox.tick(now);
+    latestSnapshot = twin.ingest(latestBatch);
+    recentSnapshots.push({
+      observedAt: latestSnapshot.observedAt,
+      zones: latestSnapshot.zones,
+    });
+
+    if (recentSnapshots.length > 120) {
+      recentSnapshots.shift();
+    }
+
+    now = new Date(now.getTime() + truth.runtime.simulation_timestep_s * 1000);
+  }
+
+  assert.ok(latestBatch);
+  assert.ok(latestSnapshot);
+
+  const assessment = assessRuntimeDrift({
+    blueprint,
+    controls: sandbox.getControlState(),
+    currentSnapshot: latestSnapshot,
+    recentSnapshots,
+    activeFaultIds: [],
+  });
+
+  assert.equal(assessment.trigger, "comfort_drift");
+  assert.equal(assessment.reason, "temperature_cold");
+  assert.ok(assessment.horizonMinutes >= 20);
+
+  const horizonMinutes = Math.max(20, assessment.horizonMinutes);
+  const basePlan = buildAssistPlanFromAssessment({
+    assessment,
+    currentSnapshot: latestSnapshot,
+    runtimeSeconds: latestBatch.operationalState.runtimeSeconds,
+    horizonMinutes,
+  });
+  const baseOutcome = await simulateAssistPreview({
+    sandbox,
+    blueprint,
+    products,
+    seedBatch: latestBatch,
+    seedSnapshot: latestSnapshot,
+    now,
+    horizonMinutes,
+    plan: basePlan,
+  });
+  const refinedPlan = refineAssistPlanFromOutcome({
+    blueprint,
+    controls: sandbox.getControlState(),
+    currentSnapshot: latestSnapshot,
+    outcomeSnapshot: baseOutcome.snapshot,
+    previousPlan: basePlan,
+    runtimeSeconds: latestBatch.operationalState.runtimeSeconds,
+    horizonMinutes,
+  });
+  const refinedOutcome = await simulateAssistPreview({
+    sandbox,
+    blueprint,
+    products,
+    seedBatch: latestBatch,
+    seedSnapshot: latestSnapshot,
+    now,
+    horizonMinutes,
+    plan: refinedPlan,
+  });
+  const baseScore = scoreTwinSnapshotAgainstControls({
+    blueprint,
+    controls: sandbox.getControlState(),
+    snapshot: baseOutcome.snapshot,
+  });
+  const refinedScore = scoreTwinSnapshotAgainstControls({
+    blueprint,
+    controls: sandbox.getControlState(),
+    snapshot: refinedOutcome.snapshot,
+  });
+  const selectedPlan = refinedScore.totalScore < baseScore.totalScore ? refinedPlan : basePlan;
+
+  sandbox.setAssistPlan(selectedPlan);
+  const liveTwin = new BelimoEngine(blueprint, products);
+  liveTwin.ingest(latestBatch);
+  let liveNow = new Date(now.getTime());
+  let liveSnapshot = latestSnapshot;
+
+  for (let tick = 0; tick < Math.round((horizonMinutes * 60) / truth.runtime.simulation_timestep_s); tick += 1) {
+    liveNow = new Date(liveNow.getTime() + truth.runtime.simulation_timestep_s * 1000);
+    const liveBatch = await sandbox.tick(liveNow);
+    liveSnapshot = liveTwin.ingest(liveBatch);
+  }
+
+  const liveOffice = liveSnapshot.zones.find((zone) => zone.zoneId === "open_office");
+
+  assert.ok(liveOffice);
+  assert.ok(Math.abs(liveOffice.temperatureC - openOfficeTargetC) <= 0.6);
 });
 
 test("policy resolver applies scheduled controls on top of stored manual preferences", () => {

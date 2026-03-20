@@ -124,6 +124,7 @@ function computeZoneSignal(input: {
   currentObservedAt: string;
   recentSnapshots: Array<Pick<TwinSnapshot, "observedAt" | "zones">>;
 }) {
+  const space = getSpace(input.blueprint, input.currentZone.zoneId);
   const target = getZoneTargetState(input.blueprint, input.controls, input.currentZone);
   const reference = getReferenceZone(input.recentSnapshots, input.currentZone.zoneId, input.currentObservedAt);
   const deltaMinutes = Math.max(reference?.deltaMinutes ?? 0.25, 0.25);
@@ -140,6 +141,10 @@ function computeZoneSignal(input: {
     3,
   );
   const comfortGap = round(Math.max(0, 94 - input.currentZone.comfortScore), 1);
+  const operatorTemperaturePriorityScore =
+    Math.abs(temperatureErrorC) >= 0.2 ? Math.abs(input.controls.zoneTemperatureOffsetsC[input.currentZone.zoneId] ?? 0) * 0.42 : 0;
+  const operatorCo2PriorityScore =
+    Math.max(0, (space.comfort_targets.co2_limit_ppm - target.co2TargetPpm) / 130) * (co2ExcessPpm > 0 ? 1 : 0);
 
   const temperatureMagnitudeScore = Math.abs(temperatureErrorC) / 0.32;
   const temperatureTrendScore = Math.max(0, Math.sign(temperatureErrorC || 0) * temperatureRateCPerMin) / 0.045;
@@ -152,18 +157,18 @@ function computeZoneSignal(input: {
 
   const coldScore = temperatureErrorC < 0
     ? Math.max(
-        Math.abs(temperatureMagnitudeScore) * 0.7 + temperatureTrendScore * 0.5,
+        Math.abs(temperatureMagnitudeScore) * 0.7 + temperatureTrendScore * 0.5 + operatorTemperaturePriorityScore,
         temperatureProjectedScore,
       )
     : 0;
   const hotScore = temperatureErrorC > 0
     ? Math.max(
-        Math.abs(temperatureMagnitudeScore) * 0.7 + temperatureTrendScore * 0.5,
+        Math.abs(temperatureMagnitudeScore) * 0.7 + temperatureTrendScore * 0.5 + operatorTemperaturePriorityScore,
         temperatureProjectedScore,
       )
     : 0;
   const ventilationScore = Math.max(
-    co2MagnitudeScore * 0.8 + co2TrendScore * 0.6,
+    co2MagnitudeScore * 0.8 + co2TrendScore * 0.6 + operatorCo2PriorityScore,
     co2ProjectedScore,
     airflowScore * 0.95,
   );
