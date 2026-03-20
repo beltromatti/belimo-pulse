@@ -19,11 +19,15 @@ export class SandboxBuildingGateway implements BuildingGatewayAdapter {
     private readonly products: ProductDefinition[],
     private readonly sandboxEngine: SandboxDataGenerationEngine,
   ) {
+    const displayName =
+      products.find((product) => product.id === "belimo_edge_building_gateway")?.official_reference_models[0] ??
+      "Belimo Gateway";
+
     this.descriptor = {
       gatewayId: "gateway-1",
       productId: "belimo_edge_building_gateway",
       buildingId: blueprint.blueprint_id,
-      displayName: "Belimo Edge Building Gateway",
+      displayName,
       transport: "wss_json",
       fieldProtocols: ["bacnet_mstp", "modbus_rtu", "mp_bus"],
       sourceKind: "sandbox",

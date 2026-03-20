@@ -359,6 +359,10 @@ function formatTelemetryValue(key: string, value: number | string | boolean | nu
   return `${value.toFixed(1)}`;
 }
 
+function getProductDisplayName(product: ProductDefinition) {
+  return product.official_reference_models[0] ?? `${product.brand} ${product.subtype.replaceAll("_", " ")}`;
+}
+
 function getDeviceHoverSummary(
   device: DeviceDefinition,
   product: ProductDefinition,
@@ -401,11 +405,21 @@ function getDeviceHoverSummary(
     };
   }
 
+  if (device.kind === "gateway" || product.category === "gateway") {
+    const power = telemetry?.electrical_power_kw;
+
+    return {
+      title: "Gateway",
+      subtitle: getProductDisplayName(product),
+      detail: typeof power === "number" ? `Power draw ${power.toFixed(1)} kW` : "Gateway telemetry linked",
+    };
+  }
+
   const power = telemetry?.electrical_power_kw;
 
   return {
     title: "Unit",
-    subtitle: `${product.brand} runtime source`,
+    subtitle: getProductDisplayName(product),
     detail: typeof power === "number" ? `Power draw ${power.toFixed(1)} kW` : "Runtime telemetry linked",
   };
 }
