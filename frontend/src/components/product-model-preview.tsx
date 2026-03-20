@@ -1,6 +1,6 @@
 "use client";
 
-import { OrbitControls, RoundedBox } from "@react-three/drei";
+import { OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 
 import { getProductModelRegistration, RuntimeDeviceModel } from "@/components/runtime-device-models";
@@ -39,27 +39,18 @@ export function ProductModelPreview({
         <span>{product.brand}</span>
         <span>{getPreviewMountType(product).replaceAll("_", " ")}</span>
       </div>
-      <Canvas camera={{ position: [2.3, 1.35, 2.55], fov: 28 }} dpr={1.5} gl={{ powerPreference: "high-performance" }}>
+      <Canvas camera={{ position: [2.95, 1.6, 3.2], fov: 28 }} dpr={1.5} gl={{ powerPreference: "high-performance" }}>
         <color attach="background" args={["#eef4fa"]} />
         <ambientLight intensity={1.35} />
         <hemisphereLight intensity={1.1} color="#ffffff" groundColor="#d7e1ec" />
         <directionalLight position={[3.2, 5, 2.8]} intensity={2.2} />
         <directionalLight position={[-2.4, 2.2, -1.4]} intensity={0.8} color="#fff2d8" />
 
-        <group position={[0, -0.05, 0]}>
-          <RoundedBox args={[1.68, 0.08, 1.68]} radius={0.06} smoothness={4} position={[0, -0.52, 0]}>
-            <meshStandardMaterial color="#dbe6f0" roughness={0.92} metalness={0.04} />
-          </RoundedBox>
-          <RoundedBox args={[1.1, 0.05, 1.1]} radius={0.04} smoothness={4} position={[0, -0.47, 0]}>
-            <meshStandardMaterial color="#f6f9fc" roughness={0.88} metalness={0.02} />
-          </RoundedBox>
-        </group>
-
         <group rotation={registration.previewRotation} scale={registration.previewScale}>
           <RuntimeDeviceModel productId={product.id} device={device} telemetry={telemetry ?? null} />
         </group>
 
-        <OrbitControls enablePan={false} minDistance={1.8} maxDistance={4.2} autoRotate autoRotateSpeed={1.2} />
+        <OrbitControls enablePan={false} minDistance={2.4} maxDistance={5.2} autoRotate autoRotateSpeed={1.2} />
       </Canvas>
     </div>
   );

@@ -230,6 +230,7 @@ export function RuntimeShell({
   websocketUrl,
   onReturnToPortfolio,
 }: RuntimeShellProps) {
+  const drawerDockOffset = "calc(1.5rem + min(23rem, calc(100vw - 1.5rem)) + 0.75rem)";
   const [runtime, setRuntime] = useState<RuntimeState>({
     twin: initial.latestTwinSnapshot,
     sandbox: initial.latestSandboxBatch,
@@ -250,6 +251,7 @@ export function RuntimeShell({
   const [isPending, startUiTransition] = useTransition();
   const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState(false);
   const [isRightDrawerOpen, setIsRightDrawerOpen] = useState(false);
+  const [inspectView, setInspectView] = useState<"overview" | "zone" | "device">("overview");
   const deferredRuntime = useDeferredValue(runtime);
   const heartbeatRef = useRef<number | null>(null);
   const reconnectRef = useRef<number | null>(null);
@@ -328,6 +330,40 @@ export function RuntimeShell({
     [selectedTelemetryReading],
   );
 
+  const inspectOverviewSpaces = useMemo(
+    () =>
+      initial.blueprint.spaces.map((space) => ({
+        space,
+        zone: deferredRuntime.twin?.zones.find((zone) => zone.zoneId === space.id) ?? null,
+      })),
+    [deferredRuntime.twin?.zones, initial.blueprint.spaces],
+  );
+
+  const inspectOverviewDevices = useMemo(() => {
+    return initial.blueprint.devices
+      .map((device) => ({
+        device,
+        product: productById.get(device.product_id) ?? null,
+        diagnosis: diagnosisByDeviceId.get(device.id) ?? null,
+      }))
+      .filter(
+        (
+          entry,
+        ): entry is {
+          device: (typeof initial.blueprint.devices)[number];
+          product: ProductDefinition;
+          diagnosis: DeviceDiagnosis | null;
+        } => entry.product !== null,
+      )
+      .sort((left, right) => {
+        const kindOrder = (kind: string) => (kind === "actuator" ? 0 : kind === "sensor" ? 1 : 2);
+        return (
+          kindOrder(left.device.kind) - kindOrder(right.device.kind) ||
+          left.device.id.localeCompare(right.device.id)
+        );
+      });
+  }, [diagnosisByDeviceId, initial.blueprint.devices, productById]);
+
   const watchlistDevices = useMemo(() => {
     const devices = [...(deferredRuntime.twin?.devices ?? [])];
     return devices
@@ -378,6 +414,7 @@ export function RuntimeShell({
   const handleZoneSelection = useEffectEvent((zoneId: string) => {
     setSelectedZoneId(zoneId);
     setSelectedDeviceId(null);
+    setInspectView("zone");
     setIsRightDrawerOpen(true);
   });
 
@@ -390,7 +427,20 @@ export function RuntimeShell({
     }
 
     setSelectedDeviceId(deviceId);
+    setInspectView("device");
     setIsRightDrawerOpen(true);
+  });
+
+  const handleInspectDrawerToggle = useEffectEvent(() => {
+    setIsRightDrawerOpen((current) => {
+      const next = !current;
+
+      if (next) {
+        setInspectView("overview");
+      }
+
+      return next;
+    });
   });
 
   const handleSocketMessage = useEffectEvent((message: RuntimeSocketMessage) => {
@@ -624,23 +674,26 @@ export function RuntimeShell({
     <main className="relative min-h-screen overflow-hidden px-4 py-4 text-slate-950 sm:px-6 lg:px-8">
       <div className="mx-auto flex max-w-[1680px] flex-col gap-4">
         <section className="relative">
-          <DrawerToggle
+          <FloatingDrawerHandle
             side="left"
             isOpen={isLeftDrawerOpen}
             onClick={() => setIsLeftDrawerOpen((current) => !current)}
             label="Controls"
           />
-          <DrawerToggle
+          <FloatingDrawerHandle
             side="right"
             isOpen={isRightDrawerOpen}
-            onClick={() => setIsRightDrawerOpen((current) => !current)}
+            onClick={handleInspectDrawerToggle}
             label="Inspect"
           />
+          <DrawerDockHandle side="left" isOpen={isLeftDrawerOpen} onClick={() => setIsLeftDrawerOpen(false)} />
+          <DrawerDockHandle side="right" isOpen={isRightDrawerOpen} onClick={() => setIsRightDrawerOpen(false)} />
 
           <aside
-            className={`glass-panel fixed inset-y-4 left-4 z-30 flex w-[min(23rem,calc(100vw-1.5rem))] flex-col gap-4 overflow-y-auto p-4 transition-all duration-300 ${
+            className={`glass-panel fixed inset-y-4 left-4 z-30 flex w-[min(23rem,calc(100vw-1.5rem))] flex-col gap-4 overflow-x-visible overflow-y-auto p-4 transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
               isLeftDrawerOpen ? "translate-x-0 opacity-100" : "-translate-x-[calc(100%+1.5rem)] opacity-0 pointer-events-none"
-            }`}
+            } [&::-webkit-scrollbar]:hidden`}
+            style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
             aria-hidden={!isLeftDrawerOpen}
           >
             <CardBlock>
@@ -892,6 +945,8 @@ export function RuntimeShell({
                 products={initial.products}
                 twin={deferredRuntime.twin}
                 sandbox={deferredRuntime.sandbox}
+                leftDrawerOpen={isLeftDrawerOpen}
+                rightDrawerOpen={isRightDrawerOpen}
                 selectedZoneId={selectedZoneId}
                 worstZoneId={deferredRuntime.twin?.summary.worstZoneId ?? null}
                 onSelectZone={handleZoneSelection}
@@ -949,15 +1004,25 @@ export function RuntimeShell({
           </section>
 
           <aside
-            className={`glass-panel fixed inset-y-4 right-4 z-30 flex w-[min(23rem,calc(100vw-1.5rem))] flex-col gap-4 overflow-y-auto p-4 transition-all duration-300 ${
+            className={`glass-panel fixed inset-y-4 right-4 z-30 flex w-[min(23rem,calc(100vw-1.5rem))] flex-col gap-4 overflow-x-visible overflow-y-auto p-4 transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
               isRightDrawerOpen ? "translate-x-0 opacity-100" : "translate-x-[calc(100%+1.5rem)] opacity-0 pointer-events-none"
-            }`}
+            } [&::-webkit-scrollbar]:hidden`}
+            style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
             aria-hidden={!isRightDrawerOpen}
           >
-            {selectedDevice && selectedDeviceProduct ? (
+            {inspectView === "device" && selectedDevice && selectedDeviceProduct ? (
               <>
                 <CardBlock>
-                  <SectionEyebrow label="Selected Component" />
+                  <div className="flex items-center justify-between gap-3">
+                    <SectionEyebrow label="Selected Component" />
+                    <button
+                      type="button"
+                      onClick={() => setInspectView("overview")}
+                      className="rounded-full border border-slate-200/80 bg-white/80 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500 transition hover:border-slate-300 hover:text-slate-700"
+                    >
+                      Browse all
+                    </button>
+                  </div>
                   <div className="mt-3 flex items-start justify-between gap-3">
                     <div>
                       <h2 className="text-2xl font-semibold tracking-[-0.03em] text-slate-950">{selectedDevice.id}</h2>
@@ -1052,32 +1117,33 @@ export function RuntimeShell({
                   ) : null}
                 </CardBlock>
               </>
-            ) : (
+            ) : inspectView === "zone" && selectedZone && selectedSpace ? (
               <>
                 <CardBlock>
-                  <SectionEyebrow label="Selected Zone" />
-                  <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-slate-950">
-                    {selectedSpace?.name ?? "No selection"}
-                  </h2>
-                  {selectedZone ? (
-                    <>
-                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                        <DetailPill label="Temperature" value={`${selectedZone.temperatureC.toFixed(1)}°C`} />
-                        <DetailPill label="Humidity" value={`${selectedZone.relativeHumidityPct.toFixed(0)}%`} />
-                        <DetailPill label="CO₂" value={`${selectedZone.co2Ppm.toFixed(0)} ppm`} />
-                        <DetailPill label="Airflow" value={`${selectedZone.supplyAirflowM3H.toFixed(0)} m³/h`} />
-                        <DetailPill label="Occupancy" value={`${selectedZone.occupancyCount}`} />
-                        <DetailPill label="Comfort" value={`${selectedZone.comfortScore.toFixed(0)}%`} />
-                      </div>
-                      <p className="mt-4 text-sm leading-6 text-slate-600">
-                        Target comfort band {selectedSpace?.comfort_targets.occupied_temperature_band_c[0].toFixed(1)} to{" "}
-                        {selectedSpace?.comfort_targets.occupied_temperature_band_c[1].toFixed(1)}°C, CO₂ ceiling{" "}
-                        {selectedSpace?.comfort_targets.co2_limit_ppm.toFixed(0)} ppm.
-                      </p>
-                    </>
-                  ) : (
-                    <p className="mt-4 text-sm text-slate-500">Select a room in the scene to inspect it.</p>
-                  )}
+                  <div className="flex items-center justify-between gap-3">
+                    <SectionEyebrow label="Selected Zone" />
+                    <button
+                      type="button"
+                      onClick={() => setInspectView("overview")}
+                      className="rounded-full border border-slate-200/80 bg-white/80 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500 transition hover:border-slate-300 hover:text-slate-700"
+                    >
+                      Browse all
+                    </button>
+                  </div>
+                  <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-slate-950">{selectedSpace.name}</h2>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <DetailPill label="Temperature" value={`${selectedZone.temperatureC.toFixed(1)}°C`} />
+                    <DetailPill label="Humidity" value={`${selectedZone.relativeHumidityPct.toFixed(0)}%`} />
+                    <DetailPill label="CO₂" value={`${selectedZone.co2Ppm.toFixed(0)} ppm`} />
+                    <DetailPill label="Airflow" value={`${selectedZone.supplyAirflowM3H.toFixed(0)} m³/h`} />
+                    <DetailPill label="Occupancy" value={`${selectedZone.occupancyCount}`} />
+                    <DetailPill label="Comfort" value={`${selectedZone.comfortScore.toFixed(0)}%`} />
+                  </div>
+                  <p className="mt-4 text-sm leading-6 text-slate-600">
+                    Target comfort band {selectedSpace.comfort_targets.occupied_temperature_band_c[0].toFixed(1)} to{" "}
+                    {selectedSpace.comfort_targets.occupied_temperature_band_c[1].toFixed(1)}°C, CO₂ ceiling{" "}
+                    {selectedSpace.comfort_targets.co2_limit_ppm.toFixed(0)} ppm.
+                  </p>
                 </CardBlock>
 
                 <CardBlock>
@@ -1116,6 +1182,91 @@ export function RuntimeShell({
                       >
                         <p className="text-sm text-slate-700">{device.deviceId}</p>
                         <span className="text-xs font-medium text-slate-500">{device.productId}</span>
+                      </button>
+                    ))}
+                  </div>
+                </CardBlock>
+              </>
+            ) : (
+              <>
+                <CardBlock>
+                  <SectionEyebrow label="Inspect Menu" />
+                  <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-slate-950">Browse the building</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    Select a room to inspect comfort conditions or jump directly into any installed component.
+                  </p>
+                  <div className="mt-5 grid gap-3">
+                    {inspectOverviewSpaces.map(({ space, zone }) => (
+                      <button
+                        key={space.id}
+                        type="button"
+                        onClick={() => handleZoneSelection(space.id)}
+                        className="rounded-[1.35rem] border border-slate-200/80 bg-white/78 p-4 text-left transition hover:border-slate-300 hover:bg-white"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">Room</p>
+                            <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-slate-950">{space.name}</p>
+                          </div>
+                          <span
+                            className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                              (zone?.comfortScore ?? 0) >= 92
+                                ? "bg-emerald-500/15 text-emerald-700"
+                                : (zone?.comfortScore ?? 0) >= 78
+                                  ? "bg-amber-500/15 text-amber-700"
+                                  : "bg-rose-500/15 text-rose-700"
+                            }`}
+                          >
+                            {zone ? `${zone.comfortScore.toFixed(0)}% comfort` : "No data"}
+                          </span>
+                        </div>
+                        <div className="mt-4 grid grid-cols-2 gap-2">
+                          <MiniInspectPill label="Temp" value={zone ? `${zone.temperatureC.toFixed(1)}°C` : "--"} />
+                          <MiniInspectPill label="Airflow" value={zone ? `${zone.supplyAirflowM3H.toFixed(0)} m³/h` : "--"} />
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </CardBlock>
+
+                <CardBlock>
+                  <SectionEyebrow label="Electronic Components" />
+                  <div className="mt-4 grid gap-3">
+                    {inspectOverviewDevices.map(({ device, product, diagnosis }) => (
+                      <button
+                        key={device.id}
+                        type="button"
+                        onClick={() => handleDeviceSelection(device.id)}
+                        className="rounded-[1.35rem] border border-slate-200/80 bg-white/78 p-4 text-left transition hover:border-slate-300 hover:bg-white"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">
+                              {formatDeviceKind(device.kind)}
+                            </p>
+                            <p className="mt-2 text-base font-semibold tracking-[-0.03em] text-slate-950">{device.id}</p>
+                            <p className="mt-1 text-sm text-slate-600">
+                              {product.brand} {getDeviceDisplayName(product)}
+                            </p>
+                          </div>
+                          <span
+                            className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                              diagnosis
+                                ? diagnosis.healthScore >= 95
+                                  ? "bg-emerald-500/15 text-emerald-700"
+                                  : diagnosis.healthScore >= 85
+                                    ? "bg-amber-500/15 text-amber-700"
+                                    : "bg-rose-500/15 text-rose-700"
+                                : "bg-slate-200/70 text-slate-600"
+                            }`}
+                          >
+                            {diagnosis ? `${diagnosis.healthScore}%` : "--"}
+                          </span>
+                        </div>
+                        <div className="mt-4 flex items-center justify-between gap-3 text-sm text-slate-500">
+                          <span>{formatLabel(device.placement)}</span>
+                          <span>{device.served_space_ids.length} zones</span>
+                        </div>
                       </button>
                     ))}
                   </div>
@@ -1231,6 +1382,7 @@ export function RuntimeShell({
     </main>
     <ChatPanel
       alerts={brainAlerts}
+      rightOffset={isRightDrawerOpen ? drawerDockOffset : "1.5rem"}
       onDismissAlert={(alertId) => {
         setBrainAlerts((prev) => prev.filter((a) => a.id !== alertId));
         fetch(`/api/brain/alerts/${alertId}/dismiss`, { method: "POST" }).catch(() => {});
@@ -1251,6 +1403,7 @@ function SectionEyebrow({ label }: { label: string }) {
   return <p className="text-xs font-medium uppercase tracking-[0.28em] text-slate-500">{label}</p>;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function DrawerToggle({
   side,
   isOpen,
@@ -1327,6 +1480,100 @@ function ActivePolicyCard({
   );
 }
 
+function FloatingDrawerHandle({
+  side,
+  isOpen,
+  onClick,
+  label,
+}: {
+  side: "left" | "right";
+  isOpen: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  const sideClass = side === "left" ? "left-4" : "right-4";
+  const hoverWidthClass = side === "left" ? "hover:w-[9.5rem]" : "hover:w-[8.8rem]";
+  const alignmentClass = "justify-center";
+  const labelClass = side === "left" ? "right-4 text-right" : "left-4 text-left";
+  const absorptionClass = side === "left" ? "-translate-x-5" : "translate-x-5";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={false}
+      aria-label={`Open ${label}`}
+      className={`group fixed ${sideClass} top-1/2 z-40 flex h-[4.3rem] w-[3.25rem] -translate-y-1/2 items-center overflow-hidden rounded-full border border-white/70 bg-white/82 text-sm font-medium text-slate-700 shadow-[0_20px_50px_rgba(15,23,42,0.16)] backdrop-blur transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${alignmentClass} ${hoverWidthClass} ${
+        isOpen ? `pointer-events-none opacity-0 ${absorptionClass} scale-95` : "opacity-100"
+      }`}
+    >
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center text-slate-900 transition-opacity duration-300 group-hover:opacity-0">
+        <DrawerArrow side={side} direction="open" />
+      </span>
+      <span
+        className={`pointer-events-none absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-700 opacity-0 transition-all duration-300 group-hover:opacity-100 ${labelClass}`}
+      >
+        {label}
+      </span>
+    </button>
+  );
+}
+
+function DrawerDockHandle({
+  side,
+  isOpen,
+  onClick,
+}: {
+  side: "left" | "right";
+  isOpen: boolean;
+  onClick: () => void;
+}) {
+  const positionStyle =
+    side === "left"
+      ? { left: "calc(1rem + min(23rem, calc(100vw - 1.5rem)) - 2.45rem)" }
+      : { right: "calc(1rem + min(23rem, calc(100vw - 1.5rem)) - 2.45rem)" };
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={isOpen}
+      aria-label="Close panel"
+      className={`fixed top-1/2 z-40 flex h-[4.3rem] w-[3.25rem] -translate-y-1/2 items-center justify-center rounded-full border border-white/75 bg-white/90 text-slate-900 shadow-[0_22px_50px_rgba(15,23,42,0.18)] backdrop-blur transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+        isOpen ? "pointer-events-auto opacity-100 scale-100" : "pointer-events-none opacity-0 scale-95"
+      }`}
+      style={positionStyle}
+    >
+      <span className="flex h-7 w-7 items-center justify-center">
+        <DrawerArrow side={side} direction="close" />
+      </span>
+    </button>
+  );
+}
+
+function DrawerArrow({
+  side,
+  direction,
+}: {
+  side: "left" | "right";
+  direction: "open" | "close";
+}) {
+  const pointingLeft = (side === "left" && direction === "close") || (side === "right" && direction === "open");
+
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true" className="h-4 w-4">
+      <path
+        d={pointingLeft ? "M11.75 4.5 6.25 10l5.5 5.5" : "M8.25 4.5 13.75 10l-5.5 5.5"}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function StatusDot({ state }: { state: "connecting" | "live" | "offline" }) {
   return (
     <span
@@ -1399,6 +1646,15 @@ function DetailPill({ label, value }: { label: string; value: string }) {
     <div className="rounded-[1.15rem] border border-slate-200/70 bg-white/75 px-4 py-3">
       <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-500">{label}</p>
       <p className="mt-2 text-base font-semibold text-slate-950">{value}</p>
+    </div>
+  );
+}
+
+function MiniInspectPill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[1rem] border border-slate-200/70 bg-slate-50/90 px-3 py-2.5">
+      <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">{label}</p>
+      <p className="mt-1.5 text-sm font-semibold text-slate-950">{value}</p>
     </div>
   );
 }

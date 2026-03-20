@@ -8,6 +8,7 @@ type ChatPanelProps = {
   alerts: BrainAlert[];
   onDismissAlert: (alertId: string) => void;
   onPoliciesSync?: (policies: OperatorPolicy[]) => void;
+  rightOffset?: string;
 };
 
 const QUICK_ACTIONS = [
@@ -16,7 +17,12 @@ const QUICK_ACTIONS = [
   { label: "Optimize Comfort", message: "Analyze all zones and make adjustments to optimize comfort." },
 ];
 
-export function ChatPanel({ alerts, onDismissAlert, onPoliciesSync }: ChatPanelProps) {
+export function ChatPanel({
+  alerts,
+  onDismissAlert,
+  onPoliciesSync,
+  rightOffset = "1.5rem",
+}: ChatPanelProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -133,7 +139,8 @@ export function ChatPanel({ alerts, onDismissAlert, onPoliciesSync }: ChatPanelP
     <>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full border border-white/60 bg-[#d9691f] text-white shadow-[0_12px_40px_rgba(217,105,31,0.35)] transition-transform hover:scale-105 active:scale-95"
+        className="fixed bottom-6 z-50 flex h-14 w-14 items-center justify-center rounded-full border border-white/60 bg-[#d9691f] text-white shadow-[0_12px_40px_rgba(217,105,31,0.35)] transition-[right,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:scale-105 active:scale-95"
+        style={{ right: rightOffset }}
       >
         {isOpen ? (
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -152,7 +159,10 @@ export function ChatPanel({ alerts, onDismissAlert, onPoliciesSync }: ChatPanelP
       </button>
 
       {isOpen ? (
-        <div className="fixed bottom-24 right-6 z-50 flex h-[560px] w-[380px] flex-col overflow-hidden rounded-[1.4rem] border border-white/55 bg-white/88 shadow-[0_28px_80px_rgba(15,23,42,0.2)] backdrop-blur-xl">
+        <div
+          className="fixed bottom-24 z-50 flex h-[560px] w-[380px] flex-col overflow-hidden rounded-[1.4rem] border border-white/55 bg-white/88 shadow-[0_28px_80px_rgba(15,23,42,0.2)] backdrop-blur-xl transition-[right] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"
+          style={{ right: rightOffset }}
+        >
           <div className="flex items-center justify-between border-b border-slate-200/60 bg-gradient-to-r from-[#d9691f]/8 to-transparent px-5 py-3.5">
             <div>
               <h3 className="text-sm font-semibold text-slate-900">Belimo Brain</h3>
