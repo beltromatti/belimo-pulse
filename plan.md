@@ -232,3 +232,174 @@ Belimo Pulse — Implementation Plan
      3. 3D thermal: Open frontend, check rooms have colored floor overlays matching their temperatures
      4. 3D fault glow: Force-on a fault via control panel → device should pulse red
      5. End-to-end: Chat "the meeting room feels cold" → AI should adjust zone offset and explain
+
+
+
+
+Right now the backend still treats Belimo Brain as two entrypoints, chat() and handleTick(), not as
+  the operating system of the building in backend/src/ai/agent.ts:121 and backend/src/ai/agent.ts:159.
+  Controls are still just direct writes through backend/src/platform.ts:135, the tool surface is still
+  narrow in backend/src/ai/tools.ts:10, and the frontend still presents the brain mostly as a chat/alert
+  surface in frontend/src/components/runtime-shell.tsx:124 and frontend/src/components/chat-
+  panel.tsx:18.
+
+  The right direction is: Belimo Brain should not be a chatbot with some tools. Chat should be only one
+  ingress into a persistent policy-and-decision system.
+
+  Best Model
+
+  - Use one durable source of truth: Postgres.
+  - Keep in-memory state only as cache, never as memory.
+  - Do not store “AI context” separately from DB. Instead store:
+      - raw conversation messages for audit/history,
+      - structured operator intents and policies for execution,
+      - brain decisions and outcomes for learning/explanation.
+  - That is not bad duplication. It is one storage system with raw events plus normalized projections.
+
+  What To Persist
+
+  - conversation messages
+      - Raw user/assistant history.
+      - Useful for audit and operator review.
+  - operator policies
+      - Canonical building instructions extracted from chat.
+      - Example: “Office 21.5°C weekdays 08:00-18:00.”
+  - brain facts
+      - Long-lived context that is not directly a schedule.
+      - Example: “Facility manager prioritizes comfort over energy during client demos.”
+  - brain decisions
+      - What Belimo Brain decided, why, and what controls it applied.
+  - brain commands
+      - Future-facing queue/contract for real HVAC integration.
+      - Not for MCP now, just the contract.
+
+  Do Not Use pulse_facility_preferences For Everything
+  [pulse_facility_preferences is currently just the effective runtime controls path in backend/src/
+  platform.ts:63 and backend/src/platform.ts:135. It should stay close to “current applied state,” not
+  become the whole memory model.]
+
+  Use this split instead:
+
+  - operator_policies
+      - High-level intent from humans.
+  - effective_controls
+      - What the building should be doing right now.
+  - control_events
+      - What was actually changed.
+  - brain_decisions
+      - Why it was changed.
+
+  That separation is what makes the brain feel real.
+
+  How The Flow Should Work
+
+  1. User sends natural language.
+  2. Belimo Brain extracts structured intents from it.
+  3. Those intents are persisted as policies/facts, linked back to the source message.
+  4. A policy engine resolves what is active now.
+  5. The planner loop reads:
+      - live twin state,
+      - recent telemetry history,
+      - active policies,
+      - prior decisions,
+      - unresolved alerts.
+  6. It computes the best next action.
+  7. It writes:
+      - decision log,
+      - effective control update,
+      - optional operator alert.
+  8. Sandbox HVAC applies the control through the existing platform path.
+  9. Later, a real HVAC adapter can read the same effective-control/command contract.
+
+  Example
+  User says: “Keep the meeting room at 22°C from 9 to 5 on weekdays, but save energy after hours.”
+
+  Belimo Brain should do all of this:
+
+  - store the raw message,
+  - extract a temperature_schedule policy for meeting-room,
+  - extract an energy_strategy policy for after-hours,
+  - confirm back to the user what it stored,
+  - use those policies in future proactive analysis,
+  - apply the right control behavior when that time window becomes active,
+  - record its later decisions against that policy.
+
+  The chat itself is not the feature. The stored policy is the feature.
+
+  What To Build In This Repo
+
+  - Add a new backend layer, not just more prompt logic.
+  - Suggested modules:
+      - backend/src/brain/policies.ts
+      - backend/src/brain/context.ts
+      - backend/src/brain/planner.ts
+      - backend/src/brain/memory.ts
+      - backend/src/brain/decision-log.ts
+  - Keep backend/src/ai/agent.ts as the LLM orchestration layer, but move durable business logic out of
+    it.
+
+  Suggested Tables
+
+  - pulse_operator_policies
+      - id, building_id, scope_type, scope_id, policy_type, policy_json, priority, status,
+        source_message_id, starts_at, ends_at, recurrence, timezone
+  - pulse_brain_facts
+      - id, building_id, fact_type, summary, fact_json, confidence, source_message_id, expires_at
+  - pulse_brain_decisions
+      - id, building_id, decision_type, reason_summary, context_json, proposed_controls_json,
+        applied_controls_json, source, source_message_id
+  - pulse_brain_commands
+      - id, building_id, command_type, payload_json, status, issued_at, acknowledged_at
+
+  Why This Is Better Than “Two Storages”
+
+  - One database.
+  - Different tables for different meanings.
+  - Raw chat is not the same thing as executable policy.
+  - If you only keep chat, the brain is fuzzy.
+  - If you only keep policy, you lose audit/history.
+  - Best design is raw event + structured projection in the same Postgres system.
+
+  Frontend
+  The floating chat can stay, but it should stop being the main expression of the brain.
+  Add a persistent “Belimo Brain” surface with:
+
+  - current operating objective,
+  - active schedules/policies,
+  - latest decisions,
+  - unresolved alerts,
+  - why the system changed something,
+  - what it plans next.
+
+  That is what makes it feel like the building’s brain, not a support bot.
+
+  Best Hackathon Scope
+  I would not jump to real-HVAC execution yet. The highest-value next step is:
+
+  1. Structured operator policy persistence.
+  2. Context assembler that loads policies/facts/history for Belimo Brain.
+  5. UI panel for active policies and recent decisions.
+
+  That is the minimum architecture that makes Belimo Brain feel like the control intelligence of the
+  building.
+
+  If you want, I can implement phase 1 next:
+
+  - pulse_operator_policies
+  - intent extraction from chat into structured policies
+  - DB-backed context loading for future agent runs
+  - no MCP work
+  - no risky runtime rewrites
+
+
+› sure, lets do it
+• I’m implementing phase 1 as a backend-first change: durable operator policies, intent extraction from
+  chat, and DB-backed context loading for future Belimo Brain runs. I’m checking the current chat and
+  type boundaries first so I can add this without destabilizing the runtime path.
+
+• Updated Plan
+    □ Add DB schema and persistence helpers for operator policies and policy-aware context loading
+    □ Extend Belimo Brain chat flow to extract policies from user messages, persist them, and load
+      active policies into future prompts
+    □ Expose active policies to the runtime/bootstrap API and add a minimal frontend surface for them
+    □ Run backend build/tests and frontend lint/build verification
