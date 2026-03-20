@@ -1451,6 +1451,11 @@ function RuntimeSceneContent({
     onSelectDevice(deviceId);
   };
 
+  const clearTransientHover = () => {
+    setHoveredZoneState({ id: null, token: hoverResetToken });
+    setHoveredDeviceState({ id: null, token: hoverResetToken });
+  };
+
   useEffect(() => {
     const controls = controlsRef.current;
 
@@ -1493,18 +1498,29 @@ function RuntimeSceneContent({
       />
 
       <group
-        onPointerLeave={() => {
-          setHoveredZoneState({ id: null, token: hoverResetToken });
-          setHoveredDeviceState({ id: null, token: hoverResetToken });
-        }}
+        onPointerLeave={clearTransientHover}
       >
         <group position={[-sceneCenter.x, 0, -sceneCenter.z]}>
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[11, -0.1, 5.6]}>
+        <mesh
+          rotation={[-Math.PI / 2, 0, 0]}
+          position={[11, -0.1, 5.6]}
+          onPointerMove={(event) => {
+            event.stopPropagation();
+            clearTransientHover();
+          }}
+        >
           <planeGeometry args={[36, 26]} />
           <meshStandardMaterial color="#d3dde8" />
         </mesh>
 
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[11.4, -0.05, 5.6]}>
+        <mesh
+          rotation={[-Math.PI / 2, 0, 0]}
+          position={[11.4, -0.05, 5.6]}
+          onPointerMove={(event) => {
+            event.stopPropagation();
+            clearTransientHover();
+          }}
+        >
           <planeGeometry args={[28, 20]} />
           <meshStandardMaterial color="#eef3f7" transparent opacity={0.32} />
         </mesh>
