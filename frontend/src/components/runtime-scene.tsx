@@ -1495,9 +1495,9 @@ function RuntimeSceneContent({
   return (
     <>
       <color attach="background" args={["#d9e4ee"]} />
-      <fog attach="fog" args={["#d9e4ee", 18, 48]} />
-      <ambientLight intensity={1.45} />
-      <hemisphereLight intensity={1.25} color="#f8fafc" groundColor="#c8d4e0" />
+      <fog attach="fog" args={["#d9e4ee", 30, 92]} />
+      <ambientLight intensity={1.22} />
+      <hemisphereLight intensity={1.02} color="#f8fafc" groundColor="#c8d4e0" />
       <directionalLight position={[8, 18, 10]} intensity={2.1} />
       <directionalLight position={[-6, 12, -8]} intensity={0.4} color="#fef3c7" />
       <OrbitControls
@@ -1540,7 +1540,7 @@ function RuntimeSceneContent({
           }}
         >
           <planeGeometry args={[28, 20]} />
-          <meshStandardMaterial color="#eef3f7" transparent opacity={0.32} />
+          <meshStandardMaterial color="#eef3f7" transparent opacity={0.18} />
         </mesh>
 
         <DuctSegment from={trunkFeedStart} to={trunkFeedEnd} thickness={0.34} color={ductColor} />

@@ -62,3 +62,10 @@ This complements the main Belimo Pulse platform: the digital twin manages the bu
 - The main technical handoff is documented in [DELIVERY_TECHNICAL_SUMMARY.md](/Users/beltromatti/Desktop/belimo-pulse/DELIVERY_TECHNICAL_SUMMARY.md)
 - The delivered demo focuses on the end-to-end building runtime, digital twin, gateway, and control loop
 - Belimo Brain is intentionally disabled in the final UI build
+
+## Team
+
+- Mattia Beltrami
+- Abransh Baliyan
+- Hyeongbin Lee
+- Matteo Impieri
