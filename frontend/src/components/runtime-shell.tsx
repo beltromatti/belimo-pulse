@@ -193,47 +193,84 @@ function getDeviceDisplayName(product: ProductDefinition) {
   return product.official_reference_models[0] ?? formatLabel(product.subtype);
 }
 
-function getSourceReading(readings: DeviceTelemetryRecord[] | undefined) {
-  return readings?.find((reading) => reading.deviceId === "rtu-1") ?? null;
-}
-
-function getOperationalNarrative({
-  sourceMode,
-  supplyTemperatureC,
-  mixedAirTemperatureC,
-  outdoorAirFraction,
-  worstZone,
-  activeAlerts,
-  activeFaults,
+function ProductLineupIcon({
+  kind,
 }: {
-  sourceMode: string;
-  supplyTemperatureC: number;
-  mixedAirTemperatureC: number;
-  outdoorAirFraction: number;
-  worstZone: ZoneTwinState | null;
-  activeAlerts: number;
-  activeFaults: number;
+  kind: DeviceDefinition["kind"];
 }) {
-  const statements = [
-    `${formatModeLabel(sourceMode)} loop active. Mixed air ${mixedAirTemperatureC.toFixed(1)}°C, supply air ${supplyTemperatureC.toFixed(1)}°C, outdoor air fraction ${(outdoorAirFraction * 100).toFixed(0)}%.`,
-  ];
-
-  if (worstZone) {
-    const zoneLabel = formatZoneLabel(worstZone.zoneId);
-    const zoneState =
-      worstZone.comfortScore >= 96
-        ? `${zoneLabel} remains inside comfort band at ${worstZone.temperatureC.toFixed(1)}°C and ${worstZone.co2Ppm.toFixed(0)} ppm CO2.`
-        : `${zoneLabel} is the limiting zone at comfort ${worstZone.comfortScore.toFixed(0)} with ${worstZone.co2Ppm.toFixed(0)} ppm CO2.`;
-    statements.push(zoneState);
+  if (kind === "actuator") {
+    return (
+      <svg viewBox="0 0 32 32" aria-hidden="true" className="h-4 w-4">
+        <rect x="8" y="9" width="12" height="9" rx="2.5" fill="currentColor" opacity="0.9" />
+        <path
+          d="M20 13h4.5c1.4 0 2.5 1.1 2.5 2.5S25.9 18 24.5 18H22"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+        <path
+          d="M7 22.5h14"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
   }
 
-  statements.push(
-    activeAlerts > 0 || activeFaults > 0
-      ? `${activeAlerts} twin alerts and ${activeFaults} active sandbox disturbances currently need attention.`
-      : "No active diagnostics are escalating right now. The twin and sandbox stay aligned.",
-  );
+  if (kind === "sensor") {
+    return (
+      <svg viewBox="0 0 32 32" aria-hidden="true" className="h-4 w-4">
+        <rect x="10" y="7.5" width="12" height="17" rx="5.5" fill="none" stroke="currentColor" strokeWidth="2" />
+        <circle cx="16" cy="20.5" r="1.8" fill="currentColor" />
+        <path d="M16 12v5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
 
-  return statements;
+  if (kind === "source_equipment") {
+    return (
+      <svg viewBox="0 0 32 32" aria-hidden="true" className="h-4 w-4">
+        <rect x="7.5" y="8" width="17" height="12.5" rx="2.5" fill="none" stroke="currentColor" strokeWidth="2" />
+        <path d="M11 24.5h10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <path d="M12 14h8M16 10.5v7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true" className="h-4 w-4">
+      <rect x="8" y="8" width="16" height="16" rx="4" fill="none" stroke="currentColor" strokeWidth="2" />
+      <path d="M16 11v10M11 16h10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AreaLineupIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true" className="h-4 w-4">
+      <path
+        d="M8 10.5h16v11H8z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M16 10.5v11M8 16h8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function getSourceReading(readings: DeviceTelemetryRecord[] | undefined) {
+  return readings?.find((reading) => reading.deviceId === "rtu-1") ?? null;
 }
 
 export function RuntimeShell({
@@ -378,19 +415,6 @@ export function RuntimeShell({
       });
   }, [diagnosisByDeviceId, initial.blueprint.devices, productById]);
 
-  const watchlistDevices = useMemo(() => {
-    const devices = [...(deferredRuntime.twin?.devices ?? [])];
-    return devices
-      .sort((left, right) => {
-        if (left.healthScore !== right.healthScore) {
-          return left.healthScore - right.healthScore;
-        }
-
-        return right.alerts.length - left.alerts.length;
-      })
-      .slice(0, 5);
-  }, [deferredRuntime.twin?.devices]);
-
   const visibleBrainPolicies = useMemo(() => brainPolicies.slice(0, 5), [brainPolicies]);
   const activeControlPolicies = useMemo(
     () => runtime.controlResolution.activePolicies,
@@ -399,31 +423,11 @@ export function RuntimeShell({
 
   const sourceReading = getSourceReading(deferredRuntime.sandbox?.deviceReadings);
   const sourceTelemetry = sourceReading?.telemetry ?? {};
-  const activeAlerts = deferredRuntime.twin?.summary.activeAlertCount ?? 0;
   const activeFaults = deferredRuntime.sandbox?.operationalState.activeFaults ?? [];
-  const comfort = deferredRuntime.twin?.summary.averageComfortScore ?? 0;
   const runtimeHours = ((deferredRuntime.sandbox?.operationalState.runtimeSeconds ?? 0) / 3600).toFixed(2);
   const persistenceSummary = deferredRuntime.persistenceSummary;
   const totalAirflow = deferredRuntime.sandbox?.truth.supplyAirflowM3H ?? 0;
   const sourcePower = Number(sourceTelemetry.electrical_power_kw ?? 0);
-  const mixedAirTemperatureC = Number(
-    sourceTelemetry.mixed_air_temperature_c ?? deferredRuntime.sandbox?.truth.mixedAirTemperatureC ?? 0,
-  );
-  const outdoorAirFraction = Number(
-    sourceTelemetry.outdoor_air_fraction ?? deferredRuntime.sandbox?.truth.outdoorAirFraction ?? 0,
-  );
-  const sourceMode = String(sourceTelemetry.operating_mode ?? runtime.controls.sourceModePreference);
-  const worstZone =
-    deferredRuntime.twin?.zones.find((zone) => zone.zoneId === deferredRuntime.twin?.summary.worstZoneId) ?? null;
-  const operationalNarrative = getOperationalNarrative({
-    sourceMode,
-    supplyTemperatureC: deferredRuntime.twin?.summary.supplyTemperatureC ?? 0,
-    mixedAirTemperatureC,
-    outdoorAirFraction,
-    worstZone,
-    activeAlerts,
-    activeFaults: activeFaults.length,
-  });
 
   function handleZoneSelection(zoneId: string) {
     setSelectedZoneId(zoneId);
@@ -691,6 +695,25 @@ export function RuntimeShell({
     };
   }, []);
 
+  useEffect(() => {
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousBodyOverscrollBehavior = document.body.style.overscrollBehavior;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    const previousHtmlOverscrollBehavior = document.documentElement.style.overscrollBehavior;
+
+    document.body.style.overflow = "hidden";
+    document.body.style.overscrollBehavior = "none";
+    document.documentElement.style.overflow = "hidden";
+    document.documentElement.style.overscrollBehavior = "none";
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.body.style.overscrollBehavior = previousBodyOverscrollBehavior;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+      document.documentElement.style.overscrollBehavior = previousHtmlOverscrollBehavior;
+    };
+  }, []);
+
   return (
   <>
     <main className="relative min-h-screen overflow-hidden px-4 py-4 text-slate-950 sm:px-6 lg:px-8">
@@ -731,12 +754,57 @@ export function RuntimeShell({
                 </div>
                 <StatusDot state={connectionState} />
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <DetailPill
-                  label="Weather"
-                  value={`${deferredRuntime.twin?.weather.temperatureC.toFixed(1) ?? "--"}°C`}
-                />
-                <DetailPill label="Runtime" value={`${runtimeHours} h`} />
+              <div className="mt-4">
+                <div className="flex items-center justify-between">
+                  <SectionEyebrow label="Live Link" />
+                  <span
+                    className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                      connectionState === "live"
+                        ? "bg-emerald-500/15 text-emerald-700"
+                        : connectionState === "connecting"
+                          ? "bg-amber-500/15 text-amber-700"
+                          : "bg-rose-500/15 text-rose-700"
+                    }`}
+                  >
+                    {connectionState}
+                  </span>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <DetailPill
+                    label="Outdoor"
+                    value={`${deferredRuntime.twin?.weather.temperatureC.toFixed(1) ?? "--"}°C`}
+                  />
+                  <DetailPill
+                    label="Supply Air"
+                    value={`${deferredRuntime.twin?.summary.supplyTemperatureC.toFixed(1) ?? "--"}°C`}
+                  />
+                  <DetailPill label="Worst Zone" value={deferredRuntime.twin?.summary.worstZoneId ?? "--"} />
+                  <DetailPill label="Alerts" value={`${deferredRuntime.twin?.summary.activeAlertCount ?? 0}`} />
+                  <DetailPill label="Sandbox Faults" value={`${activeFaults.length}`} />
+                  <DetailPill
+                    label="Static Pressure"
+                    value={`${deferredRuntime.twin?.derived.staticPressurePa.toFixed(0) ?? "--"} Pa`}
+                  />
+                  <DetailPill label="History Frames" value={`${persistenceSummary.runtimeFrames}`} />
+                  <DetailPill label="Zone Samples" value={`${persistenceSummary.zoneTwinSamples}`} />
+                </div>
+                <p className="mt-4 text-sm leading-6 text-slate-600">
+                  Raw telemetry, twin-derived zone states, device diagnoses and per-tick control context are persisted
+                  for future Belimo Brain analysis. Last archived frame:{" "}
+                  {persistenceSummary.lastPersistedObservedAt
+                    ? new Date(persistenceSummary.lastPersistedObservedAt).toLocaleString("en-CH", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })
+                    : "not yet"}
+                  .
+                </p>
+                {controlError ? (
+                  <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                    {controlError}
+                  </p>
+                ) : null}
               </div>
             </CardBlock>
 
@@ -765,39 +833,6 @@ export function RuntimeShell({
                 </p>
               ) : null}
 
-              <div className="mt-5">
-                <label className="flex items-center justify-between text-sm font-medium text-slate-700">
-                  Occupancy bias
-                  <span className="font-mono text-slate-500">{draftControls.occupancyBias.toFixed(2)}x</span>
-                </label>
-                <input
-                  type="range"
-                  min="0.4"
-                  max="1.6"
-                  step="0.05"
-                  value={draftControls.occupancyBias}
-                  onChange={(event) =>
-                    setDraftControls((current) => ({
-                      ...current,
-                      occupancyBias: Number(event.target.value),
-                    }))
-                  }
-                  onPointerUp={commitOccupancyBias}
-                  onTouchEnd={commitOccupancyBias}
-                  onBlur={commitOccupancyBias}
-                  onKeyUp={(event) => {
-                    if (event.key === "Enter" || event.key.startsWith("Arrow")) {
-                      commitOccupancyBias();
-                    }
-                  }}
-                  className="mt-3 w-full accent-[#d9691f]"
-                />
-                {runtime.controls.occupancyBias !== runtime.manualControls.occupancyBias ? (
-                  <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-400">
-                    Applied now {runtime.controls.occupancyBias.toFixed(2)}x from Belimo Brain policy resolution
-                  </p>
-                ) : null}
-              </div>
             </CardBlock>
 
             <CardBlock>
@@ -956,6 +991,98 @@ export function RuntimeShell({
                 Upload Blueprint + Connect Devices
               </button>
             </CardBlock>
+
+            <CardBlock>
+              <SectionEyebrow label="Belimo Brain Control Plan" />
+              <div className="mt-4 space-y-3">
+                {activeControlPolicies.length === 0 ? (
+                  <div className="rounded-2xl border border-slate-200/70 bg-white/75 px-4 py-3 text-sm text-slate-600">
+                    No scheduled or policy-driven control overrides are active right now. The runtime is following the
+                    stored manual control layer.
+                  </div>
+                ) : (
+                  activeControlPolicies.map((policy) => (
+                    <ActivePolicyCard key={policy.id} initial={initial} policy={policy} />
+                  ))
+                )}
+              </div>
+            </CardBlock>
+
+            <CardBlock>
+              <SectionEyebrow label="Belimo Brain Memory" />
+              <div className="mt-4 space-y-3">
+                {visibleBrainPolicies.length === 0 ? (
+                  <div className="rounded-2xl border border-slate-200/70 bg-white/75 px-4 py-3 text-sm text-slate-600">
+                    No persistent operator policies stored yet. Ask Belimo Brain to remember schedules, comfort targets,
+                    or energy preferences.
+                  </div>
+                ) : (
+                  visibleBrainPolicies.map((policy) => (
+                    <div key={policy.id} className="rounded-2xl border border-slate-200/70 bg-white/75 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-medium text-slate-900">{policy.summary}</p>
+                        <span
+                          className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                            policy.importance === "requirement"
+                              ? "bg-[#d9691f]/15 text-[#a24710]"
+                              : "bg-slate-900/8 text-slate-700"
+                          }`}
+                        >
+                          {policy.importance === "requirement" ? "Required" : "Preference"}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">
+                        {formatPolicyScopeLabel(policy, initial)} • {formatModeLabel(policy.policyType)}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-600">{formatPolicyScheduleLabel(policy)}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </CardBlock>
+
+            <details className="mt-auto group rounded-[1.6rem] border border-white/55 bg-white/65 p-4">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 marker:content-none [&::-webkit-details-marker]:hidden">
+                <span className="text-sm font-medium text-slate-800">Sandbox settings</span>
+                <span className="rounded-full bg-slate-950 px-2 py-1 text-[11px] font-medium text-white transition group-open:rotate-180">
+                  +
+                </span>
+              </summary>
+
+              <div className="mt-5">
+                <label className="flex items-center justify-between text-sm font-medium text-slate-700">
+                  Occupancy bias
+                  <span className="font-mono text-slate-500">{draftControls.occupancyBias.toFixed(2)}x</span>
+                </label>
+                <input
+                  type="range"
+                  min="0.4"
+                  max="1.6"
+                  step="0.05"
+                  value={draftControls.occupancyBias}
+                  onChange={(event) =>
+                    setDraftControls((current) => ({
+                      ...current,
+                      occupancyBias: Number(event.target.value),
+                    }))
+                  }
+                  onPointerUp={commitOccupancyBias}
+                  onTouchEnd={commitOccupancyBias}
+                  onBlur={commitOccupancyBias}
+                  onKeyUp={(event) => {
+                    if (event.key === "Enter" || event.key.startsWith("Arrow")) {
+                      commitOccupancyBias();
+                    }
+                  }}
+                  className="mt-3 w-full accent-[#d9691f]"
+                />
+                {runtime.controls.occupancyBias !== runtime.manualControls.occupancyBias ? (
+                  <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-400">
+                    Applied now {runtime.controls.occupancyBias.toFixed(2)}x from Belimo Brain policy resolution
+                  </p>
+                ) : null}
+              </div>
+            </details>
           </aside>
 
           <section
@@ -979,46 +1106,6 @@ export function RuntimeShell({
               />
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
-              <CardBlock>
-                <div className="flex items-center justify-between">
-                  <SectionEyebrow label="Operational Story" />
-                  <p className="font-mono text-xs text-slate-500">Runtime {runtimeHours} h</p>
-                </div>
-                <div className="mt-4 space-y-3">
-                  {operationalNarrative.map((statement) => (
-                    <div
-                      key={statement}
-                      className="rounded-2xl border border-white/55 bg-white/72 px-4 py-3 text-sm leading-6 text-slate-700"
-                    >
-                      {statement}
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                  <InsightCard label="Comfort" value={`${comfort.toFixed(0)}%`} tone="emerald" />
-                  <InsightCard label="Mixed Air" value={`${mixedAirTemperatureC.toFixed(1)}°C`} tone="sky" />
-                  <InsightCard
-                    label="Outdoor Air"
-                    value={`${(outdoorAirFraction * 100).toFixed(0)}%`}
-                    tone="amber"
-                  />
-                </div>
-              </CardBlock>
-
-              <CardBlock>
-                <SectionEyebrow label="Device Watchlist" />
-                <div className="mt-4 space-y-3">
-                  {watchlistDevices.map((device) => (
-                    <WatchlistRow
-                      key={device.deviceId}
-                      device={device}
-                      onSelect={() => handleDeviceSelection(device.deviceId)}
-                    />
-                  ))}
-                </div>
-              </CardBlock>
-            </div>
           </section>
 
           <aside
@@ -1214,7 +1301,21 @@ export function RuntimeShell({
                   <p className="mt-2 text-sm leading-6 text-slate-600">
                     Select a room to inspect comfort conditions or jump directly into any installed component.
                   </p>
-                  <div className="mt-5 grid gap-3">
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <DetailPill label="Air Flow" value={`${totalAirflow.toFixed(0)} m³/h`} />
+                    <DetailPill label="Energy Draw" value={`${sourcePower.toFixed(1)} kW`} />
+                  </div>
+                </CardBlock>
+
+                <details className="group rounded-[1.6rem] border border-white/55 bg-white/65 p-4">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 marker:content-none [&::-webkit-details-marker]:hidden">
+                    <span className="text-sm font-medium text-slate-800">Areas</span>
+                    <span className="rounded-full bg-slate-950 px-2 py-1 text-[11px] font-medium text-white transition group-open:rotate-180">
+                      +
+                    </span>
+                  </summary>
+
+                  <div className="mt-4 grid gap-3">
                     {inspectOverviewSpaces.map(({ space, zone }) => (
                       <button
                         key={space.id}
@@ -1223,9 +1324,15 @@ export function RuntimeShell({
                         className="rounded-[1.35rem] border border-slate-200/80 bg-white/78 p-4 text-left transition hover:border-slate-300 hover:bg-white"
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">Room</p>
-                            <p className="mt-2 text-lg font-semibold tracking-[-0.03em] text-slate-950">{space.name}</p>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 text-slate-500">
+                              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-100/90 text-slate-700">
+                                <AreaLineupIcon />
+                              </span>
+                              <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">
+                                {space.name}
+                              </p>
+                            </div>
                           </div>
                           <span
                             className={`rounded-full px-2 py-1 text-[11px] font-medium ${
@@ -1246,10 +1353,16 @@ export function RuntimeShell({
                       </button>
                     ))}
                   </div>
-                </CardBlock>
+                </details>
 
-                <CardBlock>
-                  <SectionEyebrow label="Electronic Components" />
+                <details className="group rounded-[1.6rem] border border-white/55 bg-white/65 p-4">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 marker:content-none [&::-webkit-details-marker]:hidden">
+                    <span className="text-sm font-medium text-slate-800">Electronic Components</span>
+                    <span className="rounded-full bg-slate-950 px-2 py-1 text-[11px] font-medium text-white transition group-open:rotate-180">
+                      +
+                    </span>
+                  </summary>
+
                   <div className="mt-4 grid gap-3">
                     {inspectOverviewDevices.map(({ device, product, diagnosis }) => (
                       <button
@@ -1260,89 +1373,38 @@ export function RuntimeShell({
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">
-                              {formatDeviceKind(device.kind)}
-                            </p>
-                            <p className="mt-2 text-base font-semibold tracking-[-0.03em] text-slate-950">{device.id}</p>
-                            <p className="mt-1 text-sm text-slate-600">
+                            <div className="flex items-center gap-2 text-slate-500">
+                              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-100/90 text-slate-700">
+                                <ProductLineupIcon kind={device.kind} />
+                              </span>
+                              <p className="text-[11px] font-medium uppercase tracking-[0.22em]">
+                                {formatDeviceKind(device.kind)}
+                              </p>
+                            </div>
+                            <p className="mt-3 text-lg font-semibold tracking-[-0.03em] text-slate-950">
                               {product.brand} {getDeviceDisplayName(product)}
                             </p>
                           </div>
                           <span
                             className={`rounded-full px-2 py-1 text-[11px] font-medium ${
-                              diagnosis
-                                ? diagnosis.healthScore >= 95
+                              diagnosis?.alerts.length
+                                ? "bg-rose-500/15 text-rose-700"
+                                : diagnosis
                                   ? "bg-emerald-500/15 text-emerald-700"
-                                  : diagnosis.healthScore >= 85
-                                    ? "bg-amber-500/15 text-amber-700"
-                                    : "bg-rose-500/15 text-rose-700"
-                                : "bg-slate-200/70 text-slate-600"
+                                  : "bg-slate-200/70 text-slate-600"
                             }`}
                           >
-                            {diagnosis ? `${diagnosis.healthScore}%` : "--"}
+                            {diagnosis?.alerts.length ? "Alert" : diagnosis ? `Health ${diagnosis.healthScore}%` : "Health --"}
                           </span>
-                        </div>
-                        <div className="mt-4 flex items-center justify-between gap-3 text-sm text-slate-500">
-                          <span>{formatLabel(device.placement)}</span>
-                          <span>{device.served_space_ids.length} zones</span>
                         </div>
                       </button>
                     ))}
                   </div>
-                </CardBlock>
+                </details>
               </>
             )}
 
-            <CardBlock>
-              <SectionEyebrow label="Belimo Brain Control Plan" />
-              <div className="mt-4 space-y-3">
-                {activeControlPolicies.length === 0 ? (
-                  <div className="rounded-2xl border border-slate-200/70 bg-white/75 px-4 py-3 text-sm text-slate-600">
-                    No scheduled or policy-driven control overrides are active right now. The runtime is following the
-                    stored manual control layer.
-                  </div>
-                ) : (
-                  activeControlPolicies.map((policy) => (
-                    <ActivePolicyCard key={policy.id} initial={initial} policy={policy} />
-                  ))
-                )}
-              </div>
-            </CardBlock>
-
-            <CardBlock>
-              <SectionEyebrow label="Belimo Brain Memory" />
-              <div className="mt-4 space-y-3">
-                {visibleBrainPolicies.length === 0 ? (
-                  <div className="rounded-2xl border border-slate-200/70 bg-white/75 px-4 py-3 text-sm text-slate-600">
-                    No persistent operator policies stored yet. Ask Belimo Brain to remember schedules, comfort targets,
-                    or energy preferences.
-                  </div>
-                ) : (
-                  visibleBrainPolicies.map((policy) => (
-                    <div key={policy.id} className="rounded-2xl border border-slate-200/70 bg-white/75 p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-medium text-slate-900">{policy.summary}</p>
-                        <span
-                          className={`rounded-full px-2 py-1 text-[11px] font-medium ${
-                            policy.importance === "requirement"
-                              ? "bg-[#d9691f]/15 text-[#a24710]"
-                              : "bg-slate-900/8 text-slate-700"
-                          }`}
-                        >
-                          {policy.importance === "requirement" ? "Required" : "Preference"}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">
-                        {formatPolicyScopeLabel(policy, initial)} • {formatModeLabel(policy.policyType)}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-600">{formatPolicyScheduleLabel(policy)}</p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </CardBlock>
-
-            <CardBlock>
+            <CardBlock className="hidden">
               <div className="flex items-center justify-between">
                 <SectionEyebrow label="Live Link" />
                 <span
@@ -1414,8 +1476,8 @@ export function RuntimeShell({
   );
 }
 
-function CardBlock({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-[1.6rem] border border-white/55 bg-white/65 p-4">{children}</div>;
+function CardBlock({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <div className={`rounded-[1.6rem] border border-white/55 bg-white/65 p-4 ${className}`.trim()}>{children}</div>;
 }
 
 function SectionEyebrow({ label }: { label: string }) {
@@ -1549,8 +1611,20 @@ function DrawerDockHandle({
 }) {
   const positionStyle =
     side === "left"
-      ? { left: "calc(1rem + min(23rem, calc(100vw - 1.5rem)) - 2.45rem)" }
-      : { right: "calc(1rem + min(23rem, calc(100vw - 1.5rem)) - 2.45rem)" };
+      ? { left: "calc(1rem + min(23rem, calc(100vw - 1.5rem)) - 0.08rem)" }
+      : { right: "calc(1rem + min(23rem, calc(100vw - 1.5rem)) - 0.08rem)" };
+  const halfShapeClass =
+    side === "left"
+      ? "rounded-r-full rounded-l-none border-l-0 pl-1.5 pr-2"
+      : "rounded-l-full rounded-r-none border-r-0 pl-2 pr-1.5";
+  const motionClass =
+    side === "left"
+      ? isOpen
+        ? "translate-x-0 opacity-100"
+        : "-translate-x-[calc(min(23rem,calc(100vw-1.5rem))+1.5rem)] opacity-0"
+      : isOpen
+        ? "translate-x-0 opacity-100"
+        : "translate-x-[calc(min(23rem,calc(100vw-1.5rem))+1.5rem)] opacity-0";
 
   return (
     <button
@@ -1558,8 +1632,8 @@ function DrawerDockHandle({
       onClick={onClick}
       aria-expanded={isOpen}
       aria-label="Close panel"
-      className={`fixed top-1/2 z-40 flex h-[4.3rem] w-[3.25rem] -translate-y-1/2 items-center justify-center rounded-full border border-white/75 bg-white/90 text-slate-900 shadow-[0_22px_50px_rgba(15,23,42,0.18)] backdrop-blur transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-        isOpen ? "pointer-events-auto opacity-100 scale-100" : "pointer-events-none opacity-0 scale-95"
+      className={`fixed top-1/2 z-40 flex h-[4.3rem] w-[1.9rem] -translate-y-1/2 items-center justify-center border border-white/75 bg-white/90 text-slate-900 shadow-[0_18px_40px_rgba(15,23,42,0.16)] backdrop-blur transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${halfShapeClass} ${motionClass} ${
+        isOpen ? "pointer-events-auto" : "pointer-events-none"
       }`}
       style={positionStyle}
     >
@@ -1604,59 +1678,6 @@ function StatusDot({ state }: { state: "connecting" | "live" | "offline" }) {
             : "bg-rose-500"
       }`}
     />
-  );
-}
-
-function InsightCard({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "emerald" | "sky" | "amber";
-}) {
-  const toneClass =
-    tone === "emerald"
-      ? "from-emerald-500/30 to-emerald-100 text-emerald-800"
-      : tone === "sky"
-        ? "from-sky-500/30 to-sky-100 text-sky-800"
-        : "from-amber-500/30 to-amber-100 text-amber-800";
-
-  return (
-    <div className={`rounded-[1.25rem] border border-white/55 bg-gradient-to-br p-4 ${toneClass}`}>
-      <p className="text-[11px] font-medium uppercase tracking-[0.24em]">{label}</p>
-      <p className="mt-2 text-2xl font-semibold tracking-[-0.04em]">{value}</p>
-    </div>
-  );
-}
-
-function WatchlistRow({ device, onSelect }: { device: DeviceDiagnosis; onSelect?: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className="w-full rounded-[1.2rem] border border-slate-200/70 bg-white/75 px-4 py-3 text-left transition hover:border-slate-300 hover:bg-white"
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-slate-900">{device.deviceId}</p>
-          <p className="mt-1 text-xs uppercase tracking-[0.2em] text-slate-500">{device.productId}</p>
-        </div>
-        <span
-          className={`rounded-full px-2 py-1 text-[11px] font-medium ${
-            device.healthScore >= 95
-              ? "bg-emerald-500/15 text-emerald-700"
-              : device.healthScore >= 85
-                ? "bg-amber-500/15 text-amber-700"
-                : "bg-rose-500/15 text-rose-700"
-          }`}
-        >
-          {device.healthScore}%
-        </span>
-      </div>
-      <p className="mt-2 text-sm text-slate-600">{device.alerts[0] ?? "No active alert. Device is simply the weakest link right now."}</p>
-    </button>
   );
 }
 

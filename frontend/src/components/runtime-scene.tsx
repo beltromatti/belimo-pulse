@@ -1756,45 +1756,46 @@ function RuntimeSceneContent({
   );
 }
 
-function AirflowIcon() {
-  return (
-    <svg viewBox="0 0 28 28" aria-hidden="true" className="h-6 w-6 text-slate-700">
-      <path
-        d="M5 11.5c2.1-3 5-4.5 8.8-4.5 2.2 0 4.1.5 5.9 1.4M6.5 16.5c1.8 2.7 4.5 4 8 4 3.2 0 5.9-1.1 8-3.4M18.8 8.6c1.9.9 3.3 2.4 4.2 4.4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M20.5 5.8l4.2 2.6-3 3.4M18.8 18.2l4.7-.3-.9 4.4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
+function WeatherStatusIcon({ isNight, cloudCoverPct }: { isNight: boolean; cloudCoverPct: number }) {
+  const cloudOpacity = cloudCoverPct >= 35 ? 1 : 0.45;
 
-function PowerIcon() {
   return (
-    <svg viewBox="0 0 28 28" aria-hidden="true" className="h-6 w-6 text-slate-700">
+    <svg viewBox="0 0 28 28" aria-hidden="true" className="h-7 w-7 text-slate-500">
+      {isNight ? (
+        <>
+          <path
+            d="M16.9 5.4a6.6 6.6 0 1 0 5.7 9.9 7.1 7.1 0 0 1-5.7-9.9Z"
+            fill="currentColor"
+            opacity="0.2"
+          />
+          <path
+            d="M17.2 5.4a6.5 6.5 0 0 0 4.5 10.9"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </>
+      ) : (
+        <>
+          <circle cx="12.5" cy="10.5" r="3.6" fill="currentColor" opacity="0.18" />
+          <circle cx="12.5" cy="10.5" r="3.1" fill="none" stroke="currentColor" strokeWidth="1.8" />
+        </>
+      )}
       <path
-        d="M14 3.5v8.8"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.4"
-        strokeLinecap="round"
+        d="M9 20h9.3a3.2 3.2 0 0 0 .1-6.4 4.6 4.6 0 0 0-8.7-1.1A3.7 3.7 0 0 0 9 20Z"
+        fill="currentColor"
+        opacity={cloudOpacity * 0.2}
       />
       <path
-        d="M9.2 6.8a9 9 0 1 0 9.6 0"
+        d="M9 20h9.3a3.2 3.2 0 0 0 .1-6.4 4.6 4.6 0 0 0-8.7-1.1A3.7 3.7 0 0 0 9 20Z"
         fill="none"
         stroke="currentColor"
-        strokeWidth="2.4"
+        strokeWidth="1.8"
         strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity={cloudOpacity}
       />
     </svg>
   );
@@ -1806,6 +1807,38 @@ export function RuntimeScene(props: RuntimeSceneProps) {
   const [hasActiveHoverCard, setHasActiveHoverCard] = useState(false);
   const [hoverResetToken, setHoverResetToken] = useState(0);
   const shouldPauseRotation = isSceneHovered || hasActiveHoverCard;
+  const weatherSnapshot = props.twin?.weather ?? props.sandbox?.weather ?? null;
+  const observedAt = props.twin?.observedAt ?? props.sandbox?.observedAt ?? null;
+  const timeFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat("it-IT", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: props.blueprint.building.timezone,
+      }),
+    [props.blueprint.building.timezone],
+  );
+  const observedDate = observedAt ? new Date(observedAt) : null;
+  const localTimeLabel = observedDate ? timeFormatter.format(observedDate) : "--:--";
+  const localHour = observedDate
+    ? Number(
+        new Intl.DateTimeFormat("en-GB", {
+          hour: "2-digit",
+          hour12: false,
+          timeZone: props.blueprint.building.timezone,
+        }).format(observedDate),
+      )
+    : 12;
+  const isNight = localHour >= 21 || localHour < 6;
+  const weatherLabel = isNight
+    ? "NOTTE"
+    : (weatherSnapshot?.cloudCoverPct ?? 0) >= 70
+      ? "COPERTO"
+      : (weatherSnapshot?.cloudCoverPct ?? 0) >= 35
+        ? "NUVOLOSO"
+        : "SERENO";
+  const cityLabel = props.blueprint.building.location.city.toLocaleUpperCase("it-IT");
 
   return (
     <div
@@ -1839,26 +1872,20 @@ export function RuntimeScene(props: RuntimeSceneProps) {
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3 text-slate-950">
-            <div
-              className="flex items-center gap-2"
-              aria-label={`Total air flow ${props.totalAirflowM3H.toFixed(0)} cubic meters per hour`}
-            >
-              <AirflowIcon />
-              <span className="text-base font-semibold tracking-[-0.03em]">
-                {props.totalAirflowM3H.toFixed(0)}{" "}
-                <span className="text-sm font-medium text-slate-500">m3/h</span>
+            <div className="flex items-center gap-3 rounded-full bg-white/55 px-3 py-1.5">
+              <span className="text-sm font-medium tracking-[-0.02em] text-slate-700">
+                {localTimeLabel}, {cityLabel}
               </span>
-            </div>
-            <span className="h-7 w-px bg-slate-300/80" aria-hidden="true" />
-            <div
-              className="flex items-center gap-2"
-              aria-label={`Energy draw ${props.sourcePowerKw.toFixed(1)} kilowatts`}
-            >
-              <PowerIcon />
-              <span className="text-base font-semibold tracking-[-0.03em]">
-                {props.sourcePowerKw.toFixed(1)}{" "}
-                <span className="text-sm font-medium text-slate-500">kW</span>
-              </span>
+              <span className="h-6 w-px bg-slate-300/80" aria-hidden="true" />
+              <div
+                className="flex items-center gap-2"
+                aria-label={`Weather ${weatherLabel.toLowerCase()} ${weatherSnapshot?.temperatureC.toFixed(0) ?? "--"} degrees Celsius`}
+              >
+                <WeatherStatusIcon isNight={isNight} cloudCoverPct={weatherSnapshot?.cloudCoverPct ?? 0} />
+                <span className="text-sm font-semibold tracking-[-0.02em] text-slate-700">
+                  {weatherLabel}, {weatherSnapshot?.temperatureC.toFixed(0) ?? "--"}°C
+                </span>
+              </div>
             </div>
           </div>
         </div>
