@@ -1,5 +1,6 @@
 import { BuildingBlueprint, DeviceDefinition, SpaceDefinition } from "../blueprint";
 import { ProductDefinition } from "../catalog";
+import { applyRuntimeControlInput } from "../control-state";
 import {
   OUTDOOR_CO2_PPM,
   clamp,
@@ -101,29 +102,12 @@ export class SandboxDataGenerationEngine {
   }
 
   updateControls(input: RuntimeControlInput) {
-    if (input.sourceModePreference) {
-      this.controlState.sourceModePreference = input.sourceModePreference;
-    }
+    const next = applyRuntimeControlInput(this.controlState, input);
 
-    if (typeof input.occupancyBias === "number") {
-      this.controlState.occupancyBias = clamp(input.occupancyBias, 0.4, 1.6);
-    }
-
-    if (input.zoneTemperatureOffsetsC) {
-      for (const [zoneId, offset] of Object.entries(input.zoneTemperatureOffsetsC)) {
-        if (zoneId in this.controlState.zoneTemperatureOffsetsC) {
-          this.controlState.zoneTemperatureOffsetsC[zoneId] = clamp(offset, -3, 3);
-        }
-      }
-    }
-
-    if (input.faultOverrides) {
-      for (const [faultId, mode] of Object.entries(input.faultOverrides)) {
-        if (faultId in this.controlState.faultOverrides) {
-          this.controlState.faultOverrides[faultId] = mode;
-        }
-      }
-    }
+    this.controlState.sourceModePreference = next.sourceModePreference;
+    this.controlState.zoneTemperatureOffsetsC = next.zoneTemperatureOffsetsC;
+    this.controlState.occupancyBias = next.occupancyBias;
+    this.controlState.faultOverrides = next.faultOverrides;
 
     return this.getControlState();
   }

@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { BrainAlert, ChatMessage } from "@/lib/runtime-types";
+import { BrainAlert, ChatMessage, OperatorPolicy } from "@/lib/runtime-types";
 
 type ChatPanelProps = {
   alerts: BrainAlert[];
   onDismissAlert: (alertId: string) => void;
+  onPoliciesSync?: (policies: OperatorPolicy[]) => void;
 };
 
 const QUICK_ACTIONS = [
@@ -15,7 +16,7 @@ const QUICK_ACTIONS = [
   { label: "Optimize Comfort", message: "Analyze all zones and make adjustments to optimize comfort." },
 ];
 
-export function ChatPanel({ alerts, onDismissAlert }: ChatPanelProps) {
+export function ChatPanel({ alerts, onDismissAlert, onPoliciesSync }: ChatPanelProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -88,6 +89,9 @@ export function ChatPanel({ alerts, onDismissAlert }: ChatPanelProps) {
 
         if (data.ok && data.message) {
           setMessages((prev) => [...prev, data.message]);
+          if (Array.isArray(data.policies)) {
+            onPoliciesSync?.(data.policies);
+          }
 
           if (data.conversationId) {
             setConversationId(data.conversationId);
@@ -115,7 +119,7 @@ export function ChatPanel({ alerts, onDismissAlert }: ChatPanelProps) {
         setIsLoading(false);
       }
     },
-    [conversationId, isLoading],
+    [conversationId, isLoading, onPoliciesSync],
   );
 
   const handleKeyDown = (event: React.KeyboardEvent) => {

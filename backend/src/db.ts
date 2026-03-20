@@ -1,12 +1,16 @@
 import { Pool, PoolClient } from "pg";
 
+import { PersistableOperatorPolicy } from "./brain/policies";
 import { BuildingBlueprint } from "./blueprint";
 import { env } from "./config";
+import { normalizeRuntimeControlState } from "./control-state";
 import { BrainAction, BrainAlert, ChatMessage } from "./ai/types";
 import {
   DeviceDiagnosis,
   DeviceTelemetryRecord,
+  OperatorPolicy,
   RuntimeControlState,
+  RuntimeControlResolution,
   RuntimePersistenceSummary,
   SandboxTickResult,
   TwinSnapshot,
@@ -131,6 +135,13 @@ export async function ensureDatabaseReady() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS pulse_effective_control_state (
+      building_id TEXT PRIMARY KEY,
+      effective_controls JSONB NOT NULL,
+      control_resolution JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS pulse_control_events (
       id BIGSERIAL PRIMARY KEY,
       building_id TEXT NOT NULL,
@@ -184,6 +195,36 @@ export async function ensureDatabaseReady() {
 
     CREATE INDEX IF NOT EXISTS pulse_belimo_brain_alerts_lookup_idx
       ON pulse_belimo_brain_alerts (building_id, dismissed, alert_timestamp DESC);
+
+    CREATE TABLE IF NOT EXISTS pulse_operator_policies (
+      id TEXT PRIMARY KEY,
+      building_id TEXT NOT NULL,
+      conversation_id TEXT,
+      policy_key TEXT NOT NULL,
+      policy_type TEXT NOT NULL,
+      scope_type TEXT NOT NULL,
+      scope_id TEXT,
+      importance TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      schedule_json JSONB,
+      policy_json JSONB NOT NULL,
+      source_message_timestamp TIMESTAMPTZ NOT NULL,
+      source_message_excerpt TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      superseded_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS pulse_operator_policies_lookup_idx
+      ON pulse_operator_policies (building_id, status, updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS pulse_operator_policies_scope_idx
+      ON pulse_operator_policies (building_id, scope_type, scope_id, policy_type, updated_at DESC);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS pulse_operator_policies_active_key_idx
+      ON pulse_operator_policies (building_id, policy_key)
+      WHERE status = 'active';
   `);
 }
 
@@ -550,6 +591,41 @@ export async function upsertFacilityPreferences(buildingId: string, preferences:
   );
 }
 
+export async function getFacilityPreferences(buildingId: string, fallback: RuntimeControlState) {
+  const result = await pool.query<{
+    preferences: unknown;
+  }>(
+    `
+      SELECT preferences
+      FROM pulse_facility_preferences
+      WHERE building_id = $1
+      LIMIT 1
+    `,
+    [buildingId],
+  );
+
+  if (result.rowCount === 0) {
+    return null;
+  }
+
+  return normalizeRuntimeControlState(result.rows[0].preferences, fallback);
+}
+
+export async function upsertEffectiveControlState(buildingId: string, resolution: RuntimeControlResolution) {
+  await pool.query(
+    `
+      INSERT INTO pulse_effective_control_state (building_id, effective_controls, control_resolution)
+      VALUES ($1, $2::jsonb, $3::jsonb)
+      ON CONFLICT (building_id) DO UPDATE
+      SET
+        effective_controls = EXCLUDED.effective_controls,
+        control_resolution = EXCLUDED.control_resolution,
+        updated_at = NOW()
+    `,
+    [buildingId, JSON.stringify(resolution.effectiveControls), JSON.stringify(resolution)],
+  );
+}
+
 export async function insertControlEvent(
   buildingId: string,
   actor: string,
@@ -766,6 +842,188 @@ export async function dismissBelimoBrainAlert(buildingId: string, alertId: strin
     `,
     [buildingId, alertId],
   );
+}
+
+function mapOperatorPolicyRow(row: {
+  id: string;
+  building_id: string;
+  conversation_id: string | null;
+  policy_key: string;
+  policy_type: OperatorPolicy["policyType"];
+  scope_type: OperatorPolicy["scopeType"];
+  scope_id: string | null;
+  importance: OperatorPolicy["importance"];
+  summary: string;
+  schedule_json: OperatorPolicy["schedule"] | null;
+  policy_json: OperatorPolicy["details"];
+  status: OperatorPolicy["status"];
+  created_at: string;
+  updated_at: string;
+}) {
+  return {
+    id: row.id,
+    buildingId: row.building_id,
+    conversationId: row.conversation_id ?? undefined,
+    policyKey: row.policy_key,
+    policyType: row.policy_type,
+    scopeType: row.scope_type,
+    scopeId: row.scope_id ?? undefined,
+    importance: row.importance,
+    summary: row.summary,
+    schedule: row.schedule_json,
+    details: row.policy_json,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  } satisfies OperatorPolicy;
+}
+
+export async function insertOperatorPolicies(policies: PersistableOperatorPolicy[]) {
+  if (policies.length === 0) {
+    return [] satisfies OperatorPolicy[];
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const persisted: OperatorPolicy[] = [];
+
+    for (const policy of policies) {
+      await client.query(
+        `
+          UPDATE pulse_operator_policies
+          SET status = 'superseded', superseded_at = NOW(), updated_at = NOW()
+          WHERE building_id = $1 AND policy_key = $2 AND status = 'active'
+        `,
+        [policy.buildingId, policy.policyKey],
+      );
+
+      const result = await client.query<{
+        id: string;
+        building_id: string;
+        conversation_id: string | null;
+        policy_key: string;
+        policy_type: OperatorPolicy["policyType"];
+        scope_type: OperatorPolicy["scopeType"];
+        scope_id: string | null;
+        importance: OperatorPolicy["importance"];
+        summary: string;
+        schedule_json: OperatorPolicy["schedule"] | null;
+        policy_json: OperatorPolicy["details"];
+        status: OperatorPolicy["status"];
+        created_at: string;
+        updated_at: string;
+      }>(
+        `
+          INSERT INTO pulse_operator_policies (
+            id,
+            building_id,
+            conversation_id,
+            policy_key,
+            policy_type,
+            scope_type,
+            scope_id,
+            importance,
+            summary,
+            schedule_json,
+            policy_json,
+            source_message_timestamp,
+            source_message_excerpt,
+            status
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, 'active')
+          RETURNING
+            id,
+            building_id,
+            conversation_id,
+            policy_key,
+            policy_type,
+            scope_type,
+            scope_id,
+            importance,
+            summary,
+            schedule_json,
+            policy_json,
+            status,
+            created_at::TEXT,
+            updated_at::TEXT
+        `,
+        [
+          policy.id,
+          policy.buildingId,
+          policy.conversationId ?? null,
+          policy.policyKey,
+          policy.policyType,
+          policy.scopeType,
+          policy.scopeId ?? null,
+          policy.importance,
+          policy.summary,
+          policy.schedule ? JSON.stringify(policy.schedule) : null,
+          JSON.stringify(policy.details),
+          policy.sourceMessageTimestamp,
+          policy.sourceMessageExcerpt,
+        ],
+      );
+
+      persisted.push(mapOperatorPolicyRow(result.rows[0]));
+    }
+
+    await client.query("COMMIT");
+    return persisted;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function listActiveOperatorPolicies(buildingId: string, limit = 24) {
+  const result = await pool.query<{
+    id: string;
+    building_id: string;
+    conversation_id: string | null;
+    policy_key: string;
+    policy_type: OperatorPolicy["policyType"];
+    scope_type: OperatorPolicy["scopeType"];
+    scope_id: string | null;
+    importance: OperatorPolicy["importance"];
+    summary: string;
+    schedule_json: OperatorPolicy["schedule"] | null;
+    policy_json: OperatorPolicy["details"];
+    status: OperatorPolicy["status"];
+    created_at: string;
+    updated_at: string;
+  }>(
+    `
+      SELECT
+        id,
+        building_id,
+        conversation_id,
+        policy_key,
+        policy_type,
+        scope_type,
+        scope_id,
+        importance,
+        summary,
+        schedule_json,
+        policy_json,
+        status,
+        created_at::TEXT,
+        updated_at::TEXT
+      FROM pulse_operator_policies
+      WHERE building_id = $1 AND status = 'active'
+      ORDER BY
+        CASE importance WHEN 'requirement' THEN 0 ELSE 1 END,
+        updated_at DESC,
+        created_at DESC
+      LIMIT $2
+    `,
+    [buildingId, limit],
+  );
+
+  return result.rows.map((row) => mapOperatorPolicyRow(row));
 }
 
 export async function listRecentTwinSnapshotSummaries(buildingId: string, limit: number) {

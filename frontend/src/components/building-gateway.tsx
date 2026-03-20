@@ -4,11 +4,12 @@ import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 
 import { RuntimeShell } from "@/components/runtime-shell";
-import { BrainAlert, RuntimeBootstrapPayload } from "@/lib/runtime-types";
+import { BrainAlert, OperatorPolicy, RuntimeBootstrapPayload } from "@/lib/runtime-types";
 
 type BuildingGatewayProps = {
   initial: RuntimeBootstrapPayload;
   initialBrainAlerts?: BrainAlert[];
+  initialBrainPolicies?: OperatorPolicy[];
   websocketUrl: string;
 };
 
@@ -173,7 +174,7 @@ function Metric({
   );
 }
 
-export function BuildingGateway({ initial, initialBrainAlerts, websocketUrl }: BuildingGatewayProps) {
+export function BuildingGateway({ initial, initialBrainAlerts, initialBrainPolicies, websocketUrl }: BuildingGatewayProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hasEntered, setHasEntered] = useState(false);
 
@@ -193,7 +194,7 @@ export function BuildingGateway({ initial, initialBrainAlerts, websocketUrl }: B
         summary:
           activeAlerts === 0
             ? "Sandbox twin aligned and ready for inspection."
-            : `${activeAlerts} active alert${activeAlerts === 1 ? "" : "s"} currently detected by the building brain.`,
+            : `${activeAlerts} active alert${activeAlerts === 1 ? "" : "s"} currently detected by Belimo Brain.`,
         statusLabel: activeAlerts === 0 ? "System healthy" : `${activeAlerts} alerts active`,
         statusTone: activeAlerts === 0 ? "healthy" : "warning",
         airFlowM3H: airFlow,
@@ -234,7 +235,14 @@ export function BuildingGateway({ initial, initialBrainAlerts, websocketUrl }: B
   const activeBuilding = buildings[selectedIndex];
 
   if (hasEntered && activeBuilding.available) {
-    return <RuntimeShell initial={initial} initialBrainAlerts={initialBrainAlerts} websocketUrl={websocketUrl} />;
+    return (
+      <RuntimeShell
+        initial={initial}
+        initialBrainAlerts={initialBrainAlerts}
+        initialBrainPolicies={initialBrainPolicies}
+        websocketUrl={websocketUrl}
+      />
+    );
   }
 
   return (

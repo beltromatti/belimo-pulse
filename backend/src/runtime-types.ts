@@ -118,8 +118,67 @@ export type RuntimeBootstrapPayload = {
   latestSandboxBatch: SandboxTickResult | null;
   latestTwinSnapshot: TwinSnapshot | null;
   controls: RuntimeControlState;
+  manualControls: RuntimeControlState;
+  controlResolution: RuntimeControlResolution;
   availableFaults: RuntimeFaultDescriptor[];
   persistenceSummary: RuntimePersistenceSummary;
+};
+
+export type OperatorPolicyDay = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+export type OperatorPolicySchedule = {
+  timezone: string;
+  daysOfWeek: OperatorPolicyDay[];
+  startLocalTime: string;
+  endLocalTime: string;
+};
+
+export type OperatorPolicyType =
+  | "zone_temperature_schedule"
+  | "facility_mode_preference"
+  | "occupancy_bias_preference"
+  | "energy_strategy"
+  | "operating_note";
+
+export type OperatorPolicyScopeType = "building" | "zone";
+
+export type OperatorPolicyImportance = "requirement" | "preference";
+
+export type OperatorPolicyStatus = "active" | "superseded";
+
+export type OperatorPolicy = {
+  id: string;
+  buildingId: string;
+  conversationId?: string;
+  policyKey: string;
+  policyType: OperatorPolicyType;
+  scopeType: OperatorPolicyScopeType;
+  scopeId?: string;
+  importance: OperatorPolicyImportance;
+  summary: string;
+  schedule: OperatorPolicySchedule | null;
+  details: Record<string, unknown>;
+  status: OperatorPolicyStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ActiveControlPolicy = {
+  id: string;
+  policyType: OperatorPolicyType;
+  scopeType: OperatorPolicyScopeType;
+  scopeId?: string;
+  importance: OperatorPolicyImportance;
+  summary: string;
+  schedule: OperatorPolicySchedule | null;
+  appliedControlPaths: string[];
+};
+
+export type RuntimeControlResolution = {
+  generatedAt: string;
+  manualControls: RuntimeControlState;
+  effectiveControls: RuntimeControlState;
+  activePolicies: ActiveControlPolicy[];
 };
 
 export type WebSocketTickMessage = {
@@ -129,6 +188,8 @@ export type WebSocketTickMessage = {
     twin: TwinSnapshot | null;
     sandbox: SandboxTickResult | null;
     controls: RuntimeControlState;
+    manualControls: RuntimeControlState;
+    controlResolution: RuntimeControlResolution;
     persistenceSummary: RuntimePersistenceSummary;
   };
 };
@@ -143,6 +204,8 @@ export type WebSocketAckMessage = {
   payload: {
     generatedAt: string;
     controls: RuntimeControlState;
+    manualControls: RuntimeControlState;
+    controlResolution: RuntimeControlResolution;
   };
 };
 

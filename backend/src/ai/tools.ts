@@ -1,6 +1,7 @@
 import type { Tool } from "openai/resources/responses/responses";
 
 import {
+  listActiveOperatorPolicies,
   listRecentDeviceTelemetryHistory,
   listRecentTwinSnapshotSummaries,
   listRecentZoneTwinObservations,
@@ -122,6 +123,20 @@ export const brainToolDefinitions: Tool[] = [
       type: "object",
       properties: {
         limit: { type: "number", description: "Number of recent snapshots to retrieve (default 12, max 48)" },
+      },
+      required: [],
+    },
+    strict: false,
+  },
+  {
+    type: "function",
+    name: "get_active_policies",
+    description:
+      "Get the durable operator policies Belimo Brain has stored for future building coordination, such as temperature schedules and energy preferences.",
+    parameters: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Number of active policies to retrieve (default 12, max 24)" },
       },
       required: [],
     },
@@ -251,7 +266,7 @@ export async function executeBrainTool(
     case "adjust_zone_temperature": {
       const zoneId = String(args.zoneId);
       const offsetC = Number(args.offsetC);
-      const controls = await platform.updateControls(
+      const result = await platform.updateControls(
         { zoneTemperatureOffsetsC: { [zoneId]: offsetC } },
         "belimo-brain",
       );
@@ -259,18 +274,18 @@ export async function executeBrainTool(
       return {
         success: true,
         zoneId,
-        newOffset: controls.zoneTemperatureOffsetsC[zoneId],
+        newOffset: result.controls.zoneTemperatureOffsetsC[zoneId],
         message: `Temperature offset for ${zoneId} set to ${offsetC > 0 ? "+" : ""}${offsetC}°C`,
       };
     }
 
     case "set_facility_mode": {
       const mode = String(args.mode) as "auto" | "ventilation" | "cooling" | "heating" | "economizer";
-      const controls = await platform.updateControls({ sourceModePreference: mode }, "belimo-brain");
+      const result = await platform.updateControls({ sourceModePreference: mode }, "belimo-brain");
 
       return {
         success: true,
-        newMode: controls.sourceModePreference,
+        newMode: result.controls.sourceModePreference,
         message: `Facility mode changed to '${mode}'`,
       };
     }
@@ -278,7 +293,7 @@ export async function executeBrainTool(
     case "toggle_fault": {
       const faultId = String(args.faultId);
       const mode = String(args.mode) as "auto" | "forced_on" | "forced_off";
-      const controls = await platform.updateControls(
+      const result = await platform.updateControls(
         { faultOverrides: { [faultId]: mode } },
         "belimo-brain",
       );
@@ -286,7 +301,7 @@ export async function executeBrainTool(
       return {
         success: true,
         faultId,
-        newMode: controls.faultOverrides[faultId],
+        newMode: result.controls.faultOverrides[faultId],
         message: `Fault '${faultId}' set to '${mode}'`,
       };
     }
@@ -347,6 +362,26 @@ export async function executeBrainTool(
           staticPressurePa: row.derived.staticPressurePa,
           controls: row.controls,
           activeFaults: row.active_faults ?? [],
+        })),
+      };
+    }
+
+    case "get_active_policies": {
+      const limit = Math.min(Number(args.limit) || 12, 24);
+      const rows = await listActiveOperatorPolicies(blueprint.blueprint_id, limit);
+
+      return {
+        count: rows.length,
+        policies: rows.map((policy) => ({
+          id: policy.id,
+          summary: policy.summary,
+          type: policy.policyType,
+          scopeType: policy.scopeType,
+          scopeId: policy.scopeId ?? null,
+          importance: policy.importance,
+          schedule: policy.schedule,
+          details: policy.details,
+          updatedAt: policy.updatedAt,
         })),
       };
     }

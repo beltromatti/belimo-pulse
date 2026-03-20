@@ -1,3 +1,5 @@
+import { OperatorPolicy } from "../runtime-types";
+
 export type ChatMessage = {
   role: "user" | "assistant" | "system";
   content: string;
@@ -25,4 +27,5 @@ export type ChatResponse = {
   message: ChatMessage;
   conversationId: string;
   alerts: BrainAlert[];
+  policies: OperatorPolicy[];
 };

@@ -15,6 +15,7 @@ import {
   createHealthcheck,
   ensureDatabaseReady,
   getDatabaseHealth,
+  listActiveOperatorPolicies,
   listRecentDeviceDiagnoses,
   listRecentDeviceObservations,
   listRecentRuntimeFrames,
@@ -102,6 +103,7 @@ async function bootstrap() {
     const database = await getDatabaseHealth();
     const sandbox = platform.getLatestSandboxBatch();
     const twin = platform.getLatestTwinState();
+    const activePolicies = await listActiveOperatorPolicies(sandboxBlueprint.blueprint_id, 24);
 
     response.json({
       ok: true,
@@ -124,6 +126,7 @@ async function bootstrap() {
           model: env.OPENAI_MODEL,
           reasoningEffort: env.OPENAI_REASONING_EFFORT,
           activeAlertCount: brainAgent.getActiveAlerts().length,
+          activePolicyCount: activePolicies.length,
         },
       },
       timestamp: new Date().toISOString(),
@@ -172,18 +175,21 @@ async function bootstrap() {
     });
   });
 
-  app.get("/api/runtime/bootstrap", (_request, response) => {
+  app.get("/api/runtime/bootstrap", async (_request, response) => {
+    const activePolicies = await listActiveOperatorPolicies(sandboxBlueprint.blueprint_id, 24);
+
     response.json({
       ok: true,
       payload: platform.getBootstrapPayload(),
       brainAlerts: brainAgent.getActiveAlerts(),
+      brainPolicies: activePolicies,
       websocketPath: "/ws",
     });
   });
 
   app.post("/api/runtime/control", async (request, response) => {
     const payload = controlSchema.parse(request.body ?? {});
-    const controls = await platform.updateControls(
+    const result = await platform.updateControls(
       {
         sourceModePreference: payload.sourceModePreference,
         occupancyBias: payload.occupancyBias,
@@ -195,7 +201,9 @@ async function bootstrap() {
 
     response.status(200).json({
       ok: true,
-      controls,
+      controls: result.controls,
+      manualControls: result.manualControls,
+      controlResolution: result.controlResolution,
     });
   });
 
@@ -205,6 +213,8 @@ async function bootstrap() {
       engine: "sandbox-data-generation-engine",
       latest: platform.getLatestSandboxBatch(),
       controls: platform.getControls(),
+      manualControls: platform.getManualControls(),
+      controlResolution: platform.getControlResolution(),
       availableFaults: platform.getAvailableFaults(),
       error: platform.getLastError(),
     });
@@ -259,6 +269,8 @@ async function bootstrap() {
       engine: "belimo-engine",
       twin: platform.getLatestTwinState(),
       controls: platform.getControls(),
+      manualControls: platform.getManualControls(),
+      controlResolution: platform.getControlResolution(),
       error: platform.getLastError(),
     });
   });
@@ -297,6 +309,16 @@ async function bootstrap() {
 
   app.get("/api/brain/alerts", sendBrainAlerts);
   app.get("/api/belimo-brain/alerts", sendBrainAlerts);
+
+  const sendBrainPolicies = async (_request: express.Request, response: express.Response) => {
+    response.json({
+      ok: true,
+      policies: await listActiveOperatorPolicies(sandboxBlueprint.blueprint_id, 24),
+    });
+  };
+
+  app.get("/api/brain/policies", sendBrainPolicies);
+  app.get("/api/belimo-brain/policies", sendBrainPolicies);
 
   const dismissBrainAlert = async (request: express.Request, response: express.Response) => {
     const alertId = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id;
@@ -382,6 +404,8 @@ async function bootstrap() {
             payload: {
               generatedAt: new Date().toISOString(),
               controls: platform.getControls(),
+              manualControls: platform.getManualControls(),
+              controlResolution: platform.getControlResolution(),
             },
           } satisfies RuntimeSocketMessage),
         );

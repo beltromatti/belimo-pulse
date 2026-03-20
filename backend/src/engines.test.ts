@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { isOperatorPolicyActiveAt, resolveRuntimeControlResolution } from "./brain/policy-resolver";
 import { loadSandboxBlueprint } from "./blueprint";
 import { loadProductsCatalog } from "./catalog";
 import { BelimoEngine } from "./belimo-engine";
@@ -8,6 +9,7 @@ import { SandboxDataGenerationEngine } from "./sandbox/engine";
 import { hasSandboxBehavior } from "./sandbox/product-behaviors";
 import { OpenMeteoWeatherService } from "./sandbox/weather";
 import { loadDefaultSandboxTruth } from "./sandbox-truth";
+import { OperatorPolicy, RuntimeControlState } from "./runtime-types";
 
 function createWeatherService(snapshot: {
   temperatureC: number;
@@ -99,6 +101,37 @@ function getTelemetrySchemaMap() {
       new Set(product.telemetry_schema.map((entry) => String(entry.name))),
     ]),
   );
+}
+
+function createManualControls(): RuntimeControlState {
+  const blueprint = loadSandboxBlueprint();
+  const truth = loadDefaultSandboxTruth();
+
+  return {
+    sourceModePreference: "auto",
+    zoneTemperatureOffsetsC: Object.fromEntries(blueprint.spaces.map((space) => [space.id, 0])),
+    occupancyBias: 1,
+    faultOverrides: Object.fromEntries(truth.fault_profiles.map((fault) => [fault.id, "auto"])),
+  };
+}
+
+function createOperatorPolicy(overrides: Partial<OperatorPolicy> & Pick<OperatorPolicy, "id" | "policyType" | "summary">): OperatorPolicy {
+  return {
+    id: overrides.id,
+    buildingId: overrides.buildingId ?? "sandbox-office-v1",
+    conversationId: overrides.conversationId,
+    policyKey: overrides.policyKey ?? overrides.id,
+    policyType: overrides.policyType,
+    scopeType: overrides.scopeType ?? "building",
+    scopeId: overrides.scopeId,
+    importance: overrides.importance ?? "preference",
+    summary: overrides.summary,
+    schedule: overrides.schedule ?? null,
+    details: overrides.details ?? {},
+    status: overrides.status ?? "active",
+    createdAt: overrides.createdAt ?? "2026-03-19T08:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-03-19T08:00:00.000Z",
+  };
 }
 
 test("every sandbox blueprint product is backed by an explicit behavior module", () => {
@@ -418,4 +451,124 @@ test("end-to-end HVAC envelopes stay plausible across a full day with variable w
   assert.ok(extrema.staticMin >= 140);
   assert.ok(extrema.staticMax <= 650);
   assert.ok(extrema.comfortMin >= 80);
+});
+
+test("policy resolver applies scheduled controls on top of stored manual preferences", () => {
+  const blueprint = loadSandboxBlueprint();
+  const manualControls = createManualControls();
+  manualControls.sourceModePreference = "ventilation";
+  manualControls.occupancyBias = 1.2;
+
+  const zone = blueprint.spaces.find((space) => space.id === "open_office");
+  assert.ok(zone);
+  const occupiedMidpoint = (zone.comfort_targets.occupied_temperature_band_c[0] + zone.comfort_targets.occupied_temperature_band_c[1]) / 2;
+
+  const resolution = resolveRuntimeControlResolution({
+    blueprint,
+    manualControls,
+    policies: [
+      createOperatorPolicy({
+        id: "zone-always",
+        policyType: "zone_temperature_schedule",
+        scopeType: "zone",
+        scopeId: "open_office",
+        summary: "Keep open office at 21.5C by default",
+        details: {
+          zoneId: "open_office",
+          temperatureC: 21.5,
+        },
+        updatedAt: "2026-03-19T07:30:00.000Z",
+      }),
+      createOperatorPolicy({
+        id: "zone-daytime",
+        policyType: "zone_temperature_schedule",
+        scopeType: "zone",
+        scopeId: "open_office",
+        importance: "requirement",
+        summary: "Keep open office at 23C during weekday daytime",
+        schedule: {
+          timezone: "Europe/Zurich",
+          daysOfWeek: ["mon", "tue", "wed", "thu", "fri"],
+          startLocalTime: "09:00",
+          endLocalTime: "17:00",
+        },
+        details: {
+          zoneId: "open_office",
+          temperatureC: 23,
+        },
+        updatedAt: "2026-03-19T08:00:00.000Z",
+      }),
+      createOperatorPolicy({
+        id: "mode-daytime",
+        policyType: "facility_mode_preference",
+        importance: "requirement",
+        summary: "Force cooling during occupied daytime",
+        schedule: {
+          timezone: "Europe/Zurich",
+          daysOfWeek: ["mon", "tue", "wed", "thu", "fri"],
+          startLocalTime: "09:00",
+          endLocalTime: "17:00",
+        },
+        details: {
+          mode: "cooling",
+        },
+        updatedAt: "2026-03-19T08:00:00.000Z",
+      }),
+      createOperatorPolicy({
+        id: "efficiency-night",
+        policyType: "energy_strategy",
+        summary: "Save energy after hours",
+        schedule: {
+          timezone: "Europe/Zurich",
+          daysOfWeek: ["mon", "tue", "wed", "thu", "fri"],
+          startLocalTime: "18:00",
+          endLocalTime: "07:00",
+        },
+        details: {
+          strategy: "efficiency_priority",
+        },
+      }),
+    ],
+    now: new Date("2026-03-19T10:30:00+01:00"),
+  });
+
+  assert.equal(resolution.manualControls.sourceModePreference, "ventilation");
+  assert.equal(resolution.effectiveControls.sourceModePreference, "cooling");
+  assert.equal(resolution.effectiveControls.occupancyBias, 1.2);
+  assert.equal(resolution.effectiveControls.zoneTemperatureOffsetsC.open_office, 23 - occupiedMidpoint);
+  assert.ok(resolution.activePolicies.some((policy) => policy.id === "zone-daytime"));
+  assert.ok(resolution.activePolicies.some((policy) => policy.id === "mode-daytime"));
+  assert.ok(!resolution.activePolicies.some((policy) => policy.id === "zone-always"));
+  assert.ok(!resolution.activePolicies.some((policy) => policy.id === "efficiency-night"));
+});
+
+test("policy resolver activates overnight schedules using the schedule timezone", () => {
+  const policy = createOperatorPolicy({
+    id: "night-heat",
+    policyType: "facility_mode_preference",
+    importance: "requirement",
+    summary: "Run heating overnight after Thursday closing",
+    schedule: {
+      timezone: "Europe/Zurich",
+      daysOfWeek: ["thu"],
+      startLocalTime: "22:00",
+      endLocalTime: "06:00",
+    },
+    details: {
+      mode: "heating",
+    },
+  });
+
+  assert.equal(isOperatorPolicyActiveAt(policy, new Date("2026-03-20T02:15:00+01:00")), true);
+  assert.equal(isOperatorPolicyActiveAt(policy, new Date("2026-03-20T06:15:00+01:00")), false);
+
+  const resolution = resolveRuntimeControlResolution({
+    blueprint: loadSandboxBlueprint(),
+    manualControls: createManualControls(),
+    policies: [policy],
+    now: new Date("2026-03-20T02:15:00+01:00"),
+  });
+
+  assert.equal(resolution.effectiveControls.sourceModePreference, "heating");
+  assert.ok(resolution.activePolicies.some((activePolicy) => activePolicy.id === "night-heat"));
 });

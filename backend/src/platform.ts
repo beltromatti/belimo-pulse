@@ -1,17 +1,23 @@
+import { createRuntimeControlResolution, resolveRuntimeControlResolution } from "./brain/policy-resolver";
 import { BuildingBlueprint } from "./blueprint";
 import { ProductDefinition } from "./catalog";
+import { applyRuntimeControlInput, cloneRuntimeControlState } from "./control-state";
 import {
+  getFacilityPreferences,
   getLatestTwinSnapshot,
   insertControlEvent,
   getRuntimePersistenceSummary,
   insertRuntimeArtifacts,
+  listActiveOperatorPolicies,
   upsertBlueprintRecord,
+  upsertEffectiveControlState,
   upsertFacilityPreferences,
 } from "./db";
 import {
   RuntimeBootstrapPayload,
   RuntimeControlInput,
   RuntimeControlState,
+  RuntimeControlResolution,
   RuntimeFaultDescriptor,
   RuntimePersistenceSummary,
   SandboxTickResult,
@@ -24,6 +30,8 @@ type TickListener = (payload: {
   twin: TwinSnapshot | null;
   sandbox: SandboxTickResult | null;
   controls: RuntimeControlState;
+  manualControls: RuntimeControlState;
+  controlResolution: RuntimeControlResolution;
   persistenceSummary: RuntimePersistenceSummary;
 }) => void;
 
@@ -50,6 +58,10 @@ export class BelimoPlatform {
 
   private readonly listeners = new Set<TickListener>();
 
+  private manualControls: RuntimeControlState;
+
+  private controlResolution: RuntimeControlResolution;
+
   constructor(
     private readonly blueprint: BuildingBlueprint,
     private readonly products: ProductDefinition[],
@@ -58,11 +70,16 @@ export class BelimoPlatform {
       ingest(batch: SandboxTickResult): TwinSnapshot;
     },
     private readonly tickIntervalMs: number,
-  ) {}
+  ) {
+    const initialControls = this.sandboxEngine.getControlState();
+    this.manualControls = cloneRuntimeControlState(initialControls);
+    this.controlResolution = createRuntimeControlResolution(initialControls);
+  }
 
   async start() {
     await upsertBlueprintRecord(this.blueprint);
-    await upsertFacilityPreferences(this.blueprint.blueprint_id, this.sandboxEngine.getControlState());
+    await upsertFacilityPreferences(this.blueprint.blueprint_id, this.manualControls);
+    await this.refreshEffectiveControls(new Date(), "belimo-brain-scheduler");
     await this.runTick();
     this.intervalHandle = setInterval(() => void this.runTick(), this.tickIntervalMs);
   }
@@ -99,7 +116,23 @@ export class BelimoPlatform {
   }
 
   getControls() {
-    return this.sandboxEngine.getControlState();
+    return cloneRuntimeControlState(this.controlResolution.effectiveControls);
+  }
+
+  getManualControls() {
+    return cloneRuntimeControlState(this.manualControls);
+  }
+
+  getControlResolution() {
+    return {
+      ...this.controlResolution,
+      manualControls: cloneRuntimeControlState(this.controlResolution.manualControls),
+      effectiveControls: cloneRuntimeControlState(this.controlResolution.effectiveControls),
+      activePolicies: this.controlResolution.activePolicies.map((policy) => ({
+        ...policy,
+        appliedControlPaths: [...policy.appliedControlPaths],
+      })),
+    } satisfies RuntimeControlResolution;
   }
 
   getAvailableFaults(): RuntimeFaultDescriptor[] {
@@ -119,6 +152,8 @@ export class BelimoPlatform {
       latestSandboxBatch: this.latestSandboxBatch,
       latestTwinSnapshot: this.latestTwinSnapshot,
       controls: this.getControls(),
+      manualControls: this.getManualControls(),
+      controlResolution: this.getControlResolution(),
       availableFaults: this.getAvailableFaults(),
       persistenceSummary: this.getPersistenceSummary(),
     };
@@ -133,20 +168,33 @@ export class BelimoPlatform {
   }
 
   async updateControls(input: RuntimeControlInput, actor: string) {
-    const controls = this.sandboxEngine.updateControls(input);
-    await upsertFacilityPreferences(this.blueprint.blueprint_id, controls);
+    this.manualControls = applyRuntimeControlInput(this.manualControls, input);
+    await upsertFacilityPreferences(this.blueprint.blueprint_id, this.manualControls);
+    await this.refreshEffectiveControls(new Date(), "belimo-brain-scheduler");
     await insertControlEvent(this.blueprint.blueprint_id, actor, "control_update", {
       input,
-      resultingControls: controls,
+      manualControls: this.getManualControls(),
+      effectiveControls: this.getControls(),
+      activePolicies: this.getControlResolution().activePolicies,
     });
 
     this.emitTick();
-    return controls;
+    return {
+      controls: this.getControls(),
+      manualControls: this.getManualControls(),
+      controlResolution: this.getControlResolution(),
+    };
   }
 
   async hydrateFromDatabase() {
     this.latestTwinSnapshot = await getLatestTwinSnapshot(this.blueprint.blueprint_id);
     this.persistenceSummary = await getRuntimePersistenceSummary(this.blueprint.blueprint_id);
+    const storedPreferences = await getFacilityPreferences(this.blueprint.blueprint_id, this.manualControls);
+
+    if (storedPreferences) {
+      this.manualControls = storedPreferences;
+      this.controlResolution = createRuntimeControlResolution(storedPreferences);
+    }
   }
 
   private async runTick() {
@@ -157,9 +205,11 @@ export class BelimoPlatform {
     this.isTickRunning = true;
 
     try {
-      const batch = await this.sandboxEngine.tick();
+      const now = new Date();
+      await this.refreshEffectiveControls(now, "belimo-brain-scheduler");
+      const batch = await this.sandboxEngine.tick(now);
       const snapshot = this.belimoEngine.ingest(batch);
-      const controls = this.sandboxEngine.getControlState();
+      const controls = this.getControls();
 
       await insertRuntimeArtifacts({ batch, snapshot, controls });
 
@@ -183,11 +233,47 @@ export class BelimoPlatform {
       twin: this.latestTwinSnapshot,
       sandbox: this.latestSandboxBatch,
       controls: this.getControls(),
+      manualControls: this.getManualControls(),
+      controlResolution: this.getControlResolution(),
       persistenceSummary: this.getPersistenceSummary(),
     };
 
     for (const listener of this.listeners) {
       listener(payload);
     }
+  }
+
+  private async refreshEffectiveControls(now: Date, actor: string) {
+    const policies = await listActiveOperatorPolicies(this.blueprint.blueprint_id, 64);
+    const nextResolution = resolveRuntimeControlResolution({
+      blueprint: this.blueprint,
+      manualControls: this.manualControls,
+      policies,
+      now,
+    });
+    const previousResolution = this.controlResolution;
+    const previousSignature = JSON.stringify({
+      effectiveControls: previousResolution.effectiveControls,
+      activePolicies: previousResolution.activePolicies,
+    });
+    const nextSignature = JSON.stringify({
+      effectiveControls: nextResolution.effectiveControls,
+      activePolicies: nextResolution.activePolicies,
+    });
+
+    this.controlResolution = nextResolution;
+    this.sandboxEngine.updateControls(nextResolution.effectiveControls);
+    await upsertEffectiveControlState(this.blueprint.blueprint_id, nextResolution);
+
+    if (previousSignature !== nextSignature) {
+      await insertControlEvent(this.blueprint.blueprint_id, actor, "policy_control_resolution", {
+        generatedAt: nextResolution.generatedAt,
+        manualControls: nextResolution.manualControls,
+        effectiveControls: nextResolution.effectiveControls,
+        activePolicies: nextResolution.activePolicies,
+      });
+    }
+
+    return nextResolution;
   }
 }

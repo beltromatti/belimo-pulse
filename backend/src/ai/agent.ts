@@ -5,14 +5,23 @@ import type { ResponseInput, ResponseInputItem, ResponseTextConfig } from "opena
 import { z } from "zod";
 
 import {
+  formatOperatorPolicyDraftForPrompt,
+  formatOperatorPolicyForPrompt,
+  materializeOperatorPolicies,
+  operatorPolicyExtractionJsonSchema,
+  parseOperatorPolicyExtraction,
+} from "../brain/policies";
+import {
   dismissBelimoBrainAlert,
   insertBelimoBrainAlert,
   insertBelimoBrainMessages,
+  insertOperatorPolicies,
   listActiveBelimoBrainAlerts,
+  listActiveOperatorPolicies,
   listBelimoBrainConversationMessages,
 } from "../db";
 import { BelimoPlatform } from "../platform";
-import { RuntimeControlState, TwinSnapshot } from "../runtime-types";
+import { OperatorPolicy, RuntimeControlState, TwinSnapshot } from "../runtime-types";
 
 import { BrainAction, BrainAlert, ChatMessage, ChatResponse } from "./types";
 import { brainToolDefinitions, executeBrainTool } from "./tools";
@@ -20,6 +29,7 @@ import { brainToolDefinitions, executeBrainTool } from "./tools";
 const MAX_TOOL_ROUNDS = 6;
 const DEFAULT_CHAT_HISTORY_LIMIT = 40;
 const DEFAULT_ALERT_HISTORY_LIMIT = 50;
+const DEFAULT_POLICY_LIMIT = 24;
 const PROACTIVE_CONVERSATION_SUFFIX = "belimo-brain-proactive";
 
 const proactiveAnalysisSchema = z.object({
@@ -120,21 +130,57 @@ Operating rules:
 
   async chat(message: string, conversationId?: string): Promise<ChatResponse> {
     const convId = conversationId ?? randomUUID();
+    const trimmedMessage = message.trim();
+    const policyExtraction = await this.extractOperatorPolicies(trimmedMessage, convId);
     const history = await this.getConversationHistory(convId);
+    const userTimestamp = new Date().toISOString();
     const userMessage: ChatMessage = {
       role: "user",
-      content: message.trim(),
-      timestamp: new Date().toISOString(),
+      content: trimmedMessage,
+      timestamp: userTimestamp,
     };
 
-    const actions: BrainAction[] = [];
+    const instructions = await this.buildContextualInstructions({
+      latestPolicyLines: policyExtraction.policies.map((policy) =>
+        formatOperatorPolicyDraftForPrompt(policy, this.platform.getBlueprint()),
+      ),
+      missingInformation: policyExtraction.missingInformation,
+    });
     const { outputText, actions: responseActions } = await this.runBelimoBrainResponse({
-      instructions: this.systemPrompt,
+      instructions,
       input: this.toResponseInput([...history, userMessage]),
       text: {
         verbosity: "medium",
       },
     });
+    const persistedPolicies =
+      policyExtraction.policies.length > 0
+        ? await insertOperatorPolicies(
+            materializeOperatorPolicies({
+              buildingId: this.buildingId,
+              conversationId: convId,
+              sourceMessage: {
+                content: trimmedMessage,
+                timestamp: userTimestamp,
+              },
+              drafts: policyExtraction.policies,
+            }),
+          )
+        : [];
+    const actions: BrainAction[] = persistedPolicies.map((policy) => ({
+      tool: "persist_operator_policy",
+      input: {
+        policyType: policy.policyType,
+        scopeType: policy.scopeType,
+        scopeId: policy.scopeId ?? null,
+        importance: policy.importance,
+      },
+      result: {
+        policyId: policy.id,
+        summary: policy.summary,
+        schedule: policy.schedule,
+      },
+    }));
     actions.push(...responseActions);
 
     const assistantMessage: ChatMessage = {
@@ -153,6 +199,7 @@ Operating rules:
       message: assistantMessage,
       conversationId: convId,
       alerts: this.getActiveAlerts(),
+      policies: await listActiveOperatorPolicies(this.buildingId, DEFAULT_POLICY_LIMIT),
     };
   }
 
@@ -210,15 +257,16 @@ Operating rules:
       content: this.buildProactiveReviewPrompt(snapshot, controls, triggerReason),
       timestamp: new Date().toISOString(),
     };
-
-    const { outputText, actions } = await this.runBelimoBrainResponse({
-      instructions: `${this.systemPrompt}
-
-You are running in Belimo Brain proactive mode. Before finalizing:
-- Call get_building_summary and get_building_history.
+    const instructions = await this.buildContextualInstructions({
+      modeInstructions: `You are running in Belimo Brain proactive mode. Before finalizing:
+- Call get_building_summary, get_building_history, and get_active_policies.
 - If a zone or device looks suspicious, inspect it with get_zone_details, get_device_health, get_comfort_history, or get_device_telemetry_history.
 - Use low-risk autonomous tools only when the data clearly supports a correction.
 - Return JSON that matches the schema exactly.`,
+    });
+
+    const { outputText, actions } = await this.runBelimoBrainResponse({
+      instructions,
       input: this.toResponseInput([...history, reviewMessage]),
       text: {
         verbosity: "low",
@@ -403,6 +451,104 @@ Requirements:
     return trimmed;
   }
 
+  private async extractOperatorPolicies(message: string, conversationId: string) {
+    const blueprint = this.platform.getBlueprint();
+    const zoneDirectory = blueprint.spaces.map((space) => `${space.id} ("${space.name}")`).join(", ");
+
+    try {
+      const response = await this.openai.responses.create({
+        model: this.model,
+        instructions: `You extract durable operator intent for Belimo Brain.
+
+Only extract instructions that should influence future building behavior or future Belimo Brain reasoning.
+Do not extract one-off diagnostics requests, status questions, or casual conversation.
+Use only known zone IDs. Known zones: ${zoneDirectory}.
+If a required detail is missing for a durable preference, do not invent it. Instead leave it out of policies and add a short item to missingInformation.
+If the operator expresses a persistent qualitative preference such as "prioritize comfort during client demos" or "save energy after hours", store it as either energy_strategy or operating_note.
+When no time window is specified, use schedule=null to mean always active until superseded.
+Times must be 24-hour HH:MM in the building timezone ${blueprint.building.timezone}.
+Weekdays/workdays means mon-fri unless the user explicitly says otherwise.
+Return only durable policies worth remembering.`,
+        input: [
+          {
+            role: "user",
+            content: message,
+          },
+        ],
+        text: {
+          verbosity: "low",
+          format: {
+            type: "json_schema",
+            name: "belimo_brain_operator_policy_extraction",
+            strict: true,
+            description: "Durable operator policies and missing information extracted from a facility manager message.",
+            schema: operatorPolicyExtractionJsonSchema,
+          },
+        },
+        ...this.getReasoningConfig(),
+      });
+
+      return parseOperatorPolicyExtraction(JSON.parse(response.output_text || "{}"));
+    } catch (error) {
+      console.error("Belimo Brain policy extraction failed", {
+        conversationId,
+        message,
+        error,
+      });
+
+      return {
+        policies: [],
+        missingInformation: [],
+      };
+    }
+  }
+
+  private async buildContextualInstructions(input?: {
+    modeInstructions?: string;
+    latestPolicies?: OperatorPolicy[];
+    latestPolicyLines?: string[];
+    missingInformation?: string[];
+  }) {
+    const activePolicies = await listActiveOperatorPolicies(this.buildingId, DEFAULT_POLICY_LIMIT);
+    const sections = [this.systemPrompt];
+
+    if (activePolicies.length > 0) {
+      sections.push(
+        `Persistent operator policies loaded from the database:
+${activePolicies.map((policy) => formatOperatorPolicyForPrompt(policy, this.platform.getBlueprint())).join("\n")}`,
+      );
+    } else {
+      sections.push("Persistent operator policies loaded from the database: none.");
+    }
+
+    if (input?.latestPolicies && input.latestPolicies.length > 0) {
+      sections.push(
+        `Policies persisted from the latest operator message:
+${input.latestPolicies.map((policy) => formatOperatorPolicyForPrompt(policy, this.platform.getBlueprint())).join("\n")}
+Acknowledge stored policies clearly when they are relevant to the operator's request.`,
+      );
+    } else if (input?.latestPolicyLines && input.latestPolicyLines.length > 0) {
+      sections.push(
+        `Potential policies extracted from the latest operator message and queued for persistence if your response succeeds:
+${input.latestPolicyLines.join("\n")}
+Acknowledge durable preferences clearly when they are relevant to the operator's request.`,
+      );
+    }
+
+    if (input?.missingInformation && input.missingInformation.length > 0) {
+      sections.push(
+        `Do not invent missing operator policy details. If the user is trying to set a lasting preference, ask a concise follow-up about:
+${input.missingInformation.map((item) => `- ${item}`).join("\n")}`,
+      );
+    }
+
+    if (input?.modeInstructions) {
+      sections.push(input.modeInstructions);
+    }
+
+    return sections.join("\n\n");
+  }
+
   private toResponseInput(messages: ChatMessage[]): ResponseInput {
     return messages.map((message) => ({
       role: message.role,
@@ -421,14 +567,7 @@ Requirements:
         tools: brainToolDefinitions,
         input: workingInput,
         text,
-        ...(this.supportsReasoning()
-          ? {
-              reasoning: {
-                effort: this.reasoningEffort,
-                summary: "concise",
-              },
-            }
-          : {}),
+        ...this.getReasoningConfig(),
       });
 
       const functionCalls = response.output.filter(
@@ -467,5 +606,18 @@ Requirements:
 
   private supportsReasoning() {
     return this.model.startsWith("gpt-5") || this.model.startsWith("o");
+  }
+
+  private getReasoningConfig() {
+    if (!this.supportsReasoning() || this.reasoningEffort === "none") {
+      return {};
+    }
+
+    return {
+      reasoning: {
+        effort: this.reasoningEffort,
+        summary: "concise" as const,
+      },
+    };
   }
 }

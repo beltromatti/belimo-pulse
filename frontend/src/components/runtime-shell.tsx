@@ -13,11 +13,13 @@ import {
 } from "react";
 
 import {
+  ActiveControlPolicy,
   BrainAlert,
   DeviceDiagnosis,
   DeviceTelemetryRecord,
   FacilityModePreference,
   FaultOverrideMode,
+  OperatorPolicy,
   RuntimeBootstrapPayload,
   RuntimeControlState,
   RuntimeSocketMessage,
@@ -34,6 +36,7 @@ const RuntimeScene = dynamic(
 type RuntimeShellProps = {
   initial: RuntimeBootstrapPayload;
   initialBrainAlerts?: BrainAlert[];
+  initialBrainPolicies?: OperatorPolicy[];
   websocketUrl: string;
 };
 
@@ -41,6 +44,8 @@ type RuntimeState = {
   twin: RuntimeBootstrapPayload["latestTwinSnapshot"];
   sandbox: RuntimeBootstrapPayload["latestSandboxBatch"];
   controls: RuntimeControlState;
+  manualControls: RuntimeControlState;
+  controlResolution: RuntimeBootstrapPayload["controlResolution"];
   persistenceSummary: RuntimeBootstrapPayload["persistenceSummary"];
 };
 
@@ -63,6 +68,41 @@ function formatModeLabel(mode: string) {
   return mode
     .replaceAll("_", " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function formatPolicyScheduleLabel(policy: OperatorPolicy) {
+  if (!policy.schedule) {
+    return "Always active";
+  }
+
+  return `${policy.schedule.daysOfWeek
+    .map((day) => day.charAt(0).toUpperCase() + day.slice(1))
+    .join(", ")} ${policy.schedule.startLocalTime}-${policy.schedule.endLocalTime}`;
+}
+
+function formatPolicyScopeLabel(policy: OperatorPolicy, initial: RuntimeBootstrapPayload) {
+  if (policy.scopeType !== "zone" || !policy.scopeId) {
+    return initial.blueprint.building.name;
+  }
+
+  return initial.blueprint.spaces.find((space) => space.id === policy.scopeId)?.name ?? policy.scopeId;
+}
+
+function formatAppliedControlPath(path: string, initial: RuntimeBootstrapPayload) {
+  if (path === "occupancyBias") {
+    return "Occupancy bias";
+  }
+
+  if (path === "sourceModePreference") {
+    return "Source mode preference";
+  }
+
+  if (path.startsWith("zoneTemperatureOffsetsC.")) {
+    const zoneId = path.replace("zoneTemperatureOffsetsC.", "");
+    return initial.blueprint.spaces.find((space) => space.id === zoneId)?.name ?? zoneId;
+  }
+
+  return formatModeLabel(path);
 }
 
 function getSourceReading(readings: DeviceTelemetryRecord[] | undefined) {
@@ -108,20 +148,23 @@ function getOperationalNarrative({
   return statements;
 }
 
-export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: RuntimeShellProps) {
+export function RuntimeShell({ initial, initialBrainAlerts, initialBrainPolicies, websocketUrl }: RuntimeShellProps) {
   const [runtime, setRuntime] = useState<RuntimeState>({
     twin: initial.latestTwinSnapshot,
     sandbox: initial.latestSandboxBatch,
     controls: initial.controls,
+    manualControls: initial.manualControls,
+    controlResolution: initial.controlResolution,
     persistenceSummary: initial.persistenceSummary,
   });
-  const [draftControls, setDraftControls] = useState<RuntimeControlState>(initial.controls);
+  const [draftControls, setDraftControls] = useState<RuntimeControlState>(initial.manualControls);
   const [connectionState, setConnectionState] = useState<"connecting" | "live" | "offline">("connecting");
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(
     initial.latestTwinSnapshot?.summary.worstZoneId ?? initial.blueprint.spaces[0]?.id ?? null,
   );
   const [controlError, setControlError] = useState<string | null>(null);
   const [brainAlerts, setBrainAlerts] = useState<BrainAlert[]>(initialBrainAlerts ?? []);
+  const [brainPolicies, setBrainPolicies] = useState<OperatorPolicy[]>(initialBrainPolicies ?? []);
   const [isPending, startUiTransition] = useTransition();
   const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState(false);
   const [isRightDrawerOpen, setIsRightDrawerOpen] = useState(false);
@@ -167,6 +210,12 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
       .slice(0, 5);
   }, [deferredRuntime.twin?.devices]);
 
+  const visibleBrainPolicies = useMemo(() => brainPolicies.slice(0, 5), [brainPolicies]);
+  const activeControlPolicies = useMemo(
+    () => runtime.controlResolution.activePolicies,
+    [runtime.controlResolution.activePolicies],
+  );
+
   const sourceReading = getSourceReading(deferredRuntime.sandbox?.deviceReadings);
   const sourceTelemetry = sourceReading?.telemetry ?? {};
   const activeAlerts = deferredRuntime.twin?.summary.activeAlertCount ?? 0;
@@ -198,11 +247,13 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
   const handleSocketMessage = useEffectEvent((message: RuntimeSocketMessage) => {
     if (message.type === "hello") {
       startTransition(() => {
-        setDraftControls(message.payload.controls);
+        setDraftControls(message.payload.manualControls);
         setRuntime({
           twin: message.payload.latestTwinSnapshot,
           sandbox: message.payload.latestSandboxBatch,
           controls: message.payload.controls,
+          manualControls: message.payload.manualControls,
+          controlResolution: message.payload.controlResolution,
           persistenceSummary: message.payload.persistenceSummary,
         });
       });
@@ -212,11 +263,13 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
 
     if (message.type === "tick") {
       startTransition(() => {
-        setDraftControls(message.payload.controls);
+        setDraftControls(message.payload.manualControls);
         setRuntime({
           twin: message.payload.twin,
           sandbox: message.payload.sandbox,
           controls: message.payload.controls,
+          manualControls: message.payload.manualControls,
+          controlResolution: message.payload.controlResolution,
           persistenceSummary: message.payload.persistenceSummary,
         });
       });
@@ -226,10 +279,12 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
 
     if (message.type === "ack") {
       startTransition(() => {
-        setDraftControls(message.payload.controls);
+        setDraftControls(message.payload.manualControls);
         setRuntime((current) => ({
           ...current,
           controls: message.payload.controls,
+          manualControls: message.payload.manualControls,
+          controlResolution: message.payload.controlResolution,
         }));
       });
       setControlError(null);
@@ -352,10 +407,12 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
         const payload = (await response.json()) as {
           ok: boolean;
           controls?: RuntimeControlState;
+          manualControls?: RuntimeControlState;
+          controlResolution?: RuntimeState["controlResolution"];
           message?: string;
         };
 
-        if (!response.ok || !payload.ok || !payload.controls) {
+        if (!response.ok || !payload.ok || !payload.controls || !payload.manualControls || !payload.controlResolution) {
           setControlError(payload.message ?? "Control update failed.");
           return;
         }
@@ -363,8 +420,10 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
         setRuntime((current) => ({
           ...current,
           controls: payload.controls ?? current.controls,
+          manualControls: payload.manualControls ?? current.manualControls,
+          controlResolution: payload.controlResolution ?? current.controlResolution,
         }));
-        setDraftControls(payload.controls);
+        setDraftControls(payload.manualControls);
       } catch (error) {
         setControlError(error instanceof Error ? error.message : "Unexpected control error.");
       }
@@ -373,7 +432,7 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
 
   const commitZoneOffset = (zoneId: string) => {
     const draftValue = draftControls.zoneTemperatureOffsetsC[zoneId] ?? 0;
-    const currentValue = runtime.controls.zoneTemperatureOffsetsC[zoneId] ?? 0;
+    const currentValue = runtime.manualControls.zoneTemperatureOffsetsC[zoneId] ?? 0;
 
     if (draftValue === currentValue) {
       return;
@@ -387,7 +446,7 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
   };
 
   const commitOccupancyBias = () => {
-    if (draftControls.occupancyBias === runtime.controls.occupancyBias) {
+    if (draftControls.occupancyBias === runtime.manualControls.occupancyBias) {
       return;
     }
 
@@ -464,7 +523,7 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
                     type="button"
                     onClick={() => void submitControls({ sourceModePreference: option.value })}
                     className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                      runtime.controls.sourceModePreference === option.value
+                      runtime.manualControls.sourceModePreference === option.value
                         ? "bg-[#d9691f] text-white shadow-[0_10px_30px_rgba(217,105,31,0.35)]"
                         : "bg-slate-200/70 text-slate-700 hover:bg-slate-300/80"
                     }`}
@@ -473,6 +532,12 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
                   </button>
                 ))}
               </div>
+              {runtime.controls.sourceModePreference !== runtime.manualControls.sourceModePreference ? (
+                <p className="mt-3 rounded-2xl border border-[#d9691f]/15 bg-[#d9691f]/8 px-3 py-2 text-sm text-[#8f4313]">
+                  Belimo Brain is currently applying <span className="font-medium">{formatModeLabel(runtime.controls.sourceModePreference)}</span>{" "}
+                  instead of the stored manual preference because an active policy is in force.
+                </p>
+              ) : null}
 
               <div className="mt-5">
                 <label className="flex items-center justify-between text-sm font-medium text-slate-700">
@@ -501,6 +566,11 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
                   }}
                   className="mt-3 w-full accent-[#d9691f]"
                 />
+                {runtime.controls.occupancyBias !== runtime.manualControls.occupancyBias ? (
+                  <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-400">
+                    Applied now {runtime.controls.occupancyBias.toFixed(2)}x from Belimo Brain policy resolution
+                  </p>
+                ) : null}
               </div>
             </CardBlock>
 
@@ -545,6 +615,12 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
                     }}
                     className="mt-3 w-full accent-[#d9691f]"
                   />
+                  {runtime.controls.zoneTemperatureOffsetsC[selectedSpace.id] !==
+                  runtime.manualControls.zoneTemperatureOffsetsC[selectedSpace.id] ? (
+                    <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-400">
+                      Applied now {(runtime.controls.zoneTemperatureOffsetsC[selectedSpace.id] ?? 0).toFixed(1)}°C from Belimo Brain schedule
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
             </CardBlock>
@@ -785,6 +861,55 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
             </CardBlock>
 
             <CardBlock>
+              <SectionEyebrow label="Belimo Brain Control Plan" />
+              <div className="mt-4 space-y-3">
+                {activeControlPolicies.length === 0 ? (
+                  <div className="rounded-2xl border border-slate-200/70 bg-white/75 px-4 py-3 text-sm text-slate-600">
+                    No scheduled or policy-driven control overrides are active right now. The runtime is following the
+                    stored manual control layer.
+                  </div>
+                ) : (
+                  activeControlPolicies.map((policy) => (
+                    <ActivePolicyCard key={policy.id} initial={initial} policy={policy} />
+                  ))
+                )}
+              </div>
+            </CardBlock>
+
+            <CardBlock>
+              <SectionEyebrow label="Belimo Brain Memory" />
+              <div className="mt-4 space-y-3">
+                {visibleBrainPolicies.length === 0 ? (
+                  <div className="rounded-2xl border border-slate-200/70 bg-white/75 px-4 py-3 text-sm text-slate-600">
+                    No persistent operator policies stored yet. Ask Belimo Brain to remember schedules, comfort targets,
+                    or energy preferences.
+                  </div>
+                ) : (
+                  visibleBrainPolicies.map((policy) => (
+                    <div key={policy.id} className="rounded-2xl border border-slate-200/70 bg-white/75 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-medium text-slate-900">{policy.summary}</p>
+                        <span
+                          className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                            policy.importance === "requirement"
+                              ? "bg-[#d9691f]/15 text-[#a24710]"
+                              : "bg-slate-900/8 text-slate-700"
+                          }`}
+                        >
+                          {policy.importance === "requirement" ? "Required" : "Preference"}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">
+                        {formatPolicyScopeLabel(policy, initial)} • {formatModeLabel(policy.policyType)}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-600">{formatPolicyScheduleLabel(policy)}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </CardBlock>
+
+            <CardBlock>
               <div className="flex items-center justify-between">
                 <SectionEyebrow label="Live Link" />
                 <span
@@ -847,6 +972,9 @@ export function RuntimeShell({ initial, initialBrainAlerts, websocketUrl }: Runt
         setBrainAlerts((prev) => prev.filter((a) => a.id !== alertId));
         fetch(`/api/brain/alerts/${alertId}/dismiss`, { method: "POST" }).catch(() => {});
       }}
+      onPoliciesSync={(policies) => {
+        setBrainPolicies(policies);
+      }}
     />
   </>
   );
@@ -887,6 +1015,52 @@ function DrawerToggle({
       </span>
       <span className="hidden xl:inline">{label}</span>
     </button>
+  );
+}
+
+function ActivePolicyCard({
+  initial,
+  policy,
+}: {
+  initial: RuntimeBootstrapPayload;
+  policy: ActiveControlPolicy;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200/70 bg-white/75 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-medium text-slate-900">{policy.summary}</p>
+        <span
+          className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+            policy.importance === "requirement" ? "bg-[#d9691f]/15 text-[#a24710]" : "bg-slate-900/8 text-slate-700"
+          }`}
+        >
+          {policy.importance === "requirement" ? "Required" : "Preference"}
+        </span>
+      </div>
+      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">
+        {policy.scopeType === "zone" && policy.scopeId
+          ? initial.blueprint.spaces.find((space) => space.id === policy.scopeId)?.name ?? policy.scopeId
+          : initial.blueprint.building.name}{" "}
+        • {formatModeLabel(policy.policyType)}
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {policy.appliedControlPaths.map((path) => (
+          <span
+            key={`${policy.id}-${path}`}
+            className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-600"
+          >
+            {formatAppliedControlPath(path, initial)}
+          </span>
+        ))}
+      </div>
+      <p className="mt-3 text-sm text-slate-600">
+        {policy.schedule
+          ? `${policy.schedule.daysOfWeek
+              .map((day) => day.charAt(0).toUpperCase() + day.slice(1))
+              .join(", ")} ${policy.schedule.startLocalTime}-${policy.schedule.endLocalTime}`
+          : "Always active"}
+      </p>
+    </div>
   );
 }
 
