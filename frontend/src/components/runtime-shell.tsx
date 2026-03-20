@@ -269,6 +269,7 @@ export function RuntimeShell({
   const heartbeatRef = useRef<number | null>(null);
   const reconnectRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
+  const rightDrawerRef = useRef<HTMLElement | null>(null);
 
   const selectedSpace = useMemo(
     () => initial.blueprint.spaces.find((space) => space.id === selectedZoneId) ?? null,
@@ -510,6 +511,14 @@ export function RuntimeShell({
 
     setControlError(message.payload.message);
   });
+
+  useEffect(() => {
+    if (!isRightDrawerOpen) {
+      return;
+    }
+
+    rightDrawerRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [inspectView, isRightDrawerOpen, selectedDeviceId, selectedZoneId]);
 
   useEffect(() => {
     let socket: WebSocket | null = null;
@@ -1013,6 +1022,7 @@ export function RuntimeShell({
           </section>
 
           <aside
+            ref={rightDrawerRef}
             className={`glass-panel fixed inset-y-4 right-4 z-30 flex w-[min(23rem,calc(100vw-1.5rem))] flex-col gap-4 overflow-x-visible overflow-y-auto p-4 transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
               isRightDrawerOpen ? "translate-x-0 opacity-100" : "translate-x-[calc(100%+1.5rem)] opacity-0 pointer-events-none"
             } [&::-webkit-scrollbar]:hidden`}
