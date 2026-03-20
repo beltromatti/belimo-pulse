@@ -4,7 +4,7 @@
   "blueprint_id": "sandbox-office-v1",
   "source_type": "sandbox",
   "building": {
-    "name": "Belimo Pulse Sandbox Office",
+    "name": "Belimo Sandbox Office",
     "timezone": "Europe/Zurich",
     "location": {
       "city": "St. Gallen",
@@ -628,6 +628,24 @@
         }
       },
       "design": {}
+    },
+    {
+      "id": "gateway-1",
+      "product_id": "belimo_edge_building_gateway",
+      "kind": "gateway",
+      "placement": "facility_network_rack",
+      "served_space_ids": [],
+      "layout": {
+        "position_m": {
+          "x": 19.1,
+          "y": 1.4,
+          "z": 0.9
+        }
+      },
+      "design": {
+        "telemetry_batch_period_s": 5,
+        "max_connected_devices": 32
+      }
     },
     {
       "id": "zone-damper-lobby-1",

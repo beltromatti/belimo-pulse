@@ -5,25 +5,25 @@ import { applyRuntimeControlInput, cloneRuntimeControlState } from "./control-st
 import {
   getFacilityPreferences,
   getLatestTwinSnapshot,
-  insertControlEvent,
   getRuntimePersistenceSummary,
+  insertControlEvent,
   insertRuntimeArtifacts,
   listActiveOperatorPolicies,
   upsertBlueprintRecord,
   upsertEffectiveControlState,
   upsertFacilityPreferences,
 } from "./db";
+import { BuildingGatewayAdapter, GatewayDescriptor, GatewayProtocolDescriptor, GatewaySnapshotEnvelope } from "./gateway-protocol";
 import {
   RuntimeBootstrapPayload,
   RuntimeControlInput,
-  RuntimeControlState,
   RuntimeControlResolution,
+  RuntimeControlState,
   RuntimeFaultDescriptor,
   RuntimePersistenceSummary,
   SandboxTickResult,
   TwinSnapshot,
 } from "./runtime-types";
-import { SandboxDataGenerationEngine } from "./sandbox/engine";
 
 type TickListener = (payload: {
   generatedAt: string;
@@ -43,6 +43,8 @@ export class BelimoPlatform {
   private latestSandboxBatch: SandboxTickResult | null = null;
 
   private latestTwinSnapshot: TwinSnapshot | null = null;
+
+  private latestGatewaySnapshot: GatewaySnapshotEnvelope | null = null;
 
   private lastError: string | null = null;
 
@@ -65,13 +67,13 @@ export class BelimoPlatform {
   constructor(
     private readonly blueprint: BuildingBlueprint,
     private readonly products: ProductDefinition[],
-    private readonly sandboxEngine: SandboxDataGenerationEngine,
+    private readonly buildingGateway: BuildingGatewayAdapter,
     private readonly belimoEngine: {
       ingest(batch: SandboxTickResult): TwinSnapshot;
     },
     private readonly tickIntervalMs: number,
   ) {
-    const initialControls = this.sandboxEngine.getControlState();
+    const initialControls = this.buildingGateway.getControlState();
     this.manualControls = cloneRuntimeControlState(initialControls);
     this.controlResolution = createRuntimeControlResolution(initialControls);
   }
@@ -136,11 +138,23 @@ export class BelimoPlatform {
   }
 
   getAvailableFaults(): RuntimeFaultDescriptor[] {
-    return this.sandboxEngine.getAvailableFaults();
+    return this.buildingGateway.getAvailableFaults();
   }
 
   getPersistenceSummary() {
     return this.persistenceSummary;
+  }
+
+  getGatewayDescriptor(): GatewayDescriptor {
+    return this.buildingGateway.getDescriptor();
+  }
+
+  getGatewayProtocolDescriptor(): GatewayProtocolDescriptor {
+    return this.buildingGateway.getProtocolDescriptor();
+  }
+
+  getLatestGatewaySnapshot() {
+    return this.latestGatewaySnapshot;
   }
 
   getBootstrapPayload(): RuntimeBootstrapPayload {
@@ -170,7 +184,7 @@ export class BelimoPlatform {
   async updateControls(input: RuntimeControlInput, actor: string) {
     this.manualControls = applyRuntimeControlInput(this.manualControls, input);
     await upsertFacilityPreferences(this.blueprint.blueprint_id, this.manualControls);
-    await this.refreshEffectiveControls(new Date(), "belimo-brain-scheduler");
+    await this.refreshEffectiveControls(new Date(), actor);
     await insertControlEvent(this.blueprint.blueprint_id, actor, "control_update", {
       input,
       manualControls: this.getManualControls(),
@@ -207,7 +221,8 @@ export class BelimoPlatform {
     try {
       const now = new Date();
       await this.refreshEffectiveControls(now, "belimo-brain-scheduler");
-      const batch = await this.sandboxEngine.tick(now);
+      const gatewayPoll = await this.buildingGateway.pollSnapshot(now);
+      const batch = gatewayPoll.batch;
       const snapshot = this.belimoEngine.ingest(batch);
       const controls = this.getControls();
 
@@ -215,6 +230,7 @@ export class BelimoPlatform {
 
       this.latestSandboxBatch = batch;
       this.latestTwinSnapshot = snapshot;
+      this.latestGatewaySnapshot = gatewayPoll.envelope;
       this.persistenceSummary = await getRuntimePersistenceSummary(this.blueprint.blueprint_id);
       this.lastError = null;
       this.emitTick();
@@ -262,7 +278,7 @@ export class BelimoPlatform {
     });
 
     this.controlResolution = nextResolution;
-    this.sandboxEngine.updateControls(nextResolution.effectiveControls);
+    await this.buildingGateway.applyControl(nextResolution.effectiveControls, actor);
     await upsertEffectiveControlState(this.blueprint.blueprint_id, nextResolution);
 
     if (previousSignature !== nextSignature) {

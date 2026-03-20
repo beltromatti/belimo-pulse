@@ -788,7 +788,9 @@ export function RuntimeScene(props: RuntimeSceneProps) {
           </div>
           <div className="pointer-events-none absolute inset-x-0 top-1/2 hidden -translate-y-1/2 justify-center lg:flex">
             <div className="pointer-events-auto inline-flex items-center gap-3 px-3 py-2">
-              <span className="text-sm font-medium tracking-[-0.02em] text-slate-800">{props.blueprint.building.name}</span>
+              <span className="text-sm font-medium tracking-[-0.02em] text-slate-800">
+                {props.blueprint.building.name}
+              </span>
               {props.onReturnToPortfolio ? (
                 <button
                   type="button"

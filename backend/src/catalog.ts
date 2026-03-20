@@ -20,6 +20,7 @@ const productSchema = z.object({
       "belimo_rotary_actuator",
       "belimo_duct_sensor",
       "belimo_room_sensor",
+      "gateway_appliance",
       "rooftop_unit",
       "central_plant_module",
     ]),

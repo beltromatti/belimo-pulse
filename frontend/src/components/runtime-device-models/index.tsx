@@ -6,6 +6,7 @@ import { Belimo22adp154kDifferentialPressureSensorModel } from "./belimo-22adp-1
 import { Belimo22dt12rDuctTemperatureSensorModel } from "./belimo-22dt-12r-duct-temperature-sensor";
 import { Belimo22dth15mDuctHumidityTemperatureSensorModel } from "./belimo-22dth-15m-duct-humidity-temperature-sensor";
 import { Belimo22rtm5u00aRoomIaqSensorModel } from "./belimo-22rtm-5u00a-room-iaq-sensor";
+import { BelimoEdgeBuildingGatewayModel } from "./belimo-edge-building-gateway";
 import { BelimoLmSeriesSampleAirDamperActuatorModel } from "./belimo-lm-series-sample-air-damper-actuator";
 import { BelimoNm24aModAirDamperActuatorModel } from "./belimo-nm24a-mod-air-damper-actuator";
 import { BelimoNmvD3MpVavCompactModel } from "./belimo-nmv-d3-mp-vav-compact";
@@ -79,6 +80,14 @@ const productModelRegistry: Record<string, ProductModelRegistration> = {
     sceneScale: 2,
     previewScale: 10,
     previewRotation: [0.1, -0.48, 0],
+  },
+  belimo_edge_building_gateway: {
+    Component: BelimoEdgeBuildingGatewayModel,
+    rotation: [0, -Math.PI / 4, 0],
+    positionOffset: [0, 0.02, 0],
+    sceneScale: 1.75,
+    previewScale: 8.2,
+    previewRotation: [0.18, -0.72, 0],
   },
   non_belimo_daikin_rebel_dps_rooftop_heat_pump: {
     Component: NonBelimoDaikinRebelDpsRooftopHeatPumpModel,

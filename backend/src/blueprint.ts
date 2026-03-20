@@ -81,7 +81,7 @@ const spaceSchema = z.object({
 const deviceSchema = z.object({
   id: z.string().min(1),
   product_id: z.string().min(1),
-  kind: z.enum(["source_equipment", "actuator", "sensor"]),
+  kind: z.enum(["source_equipment", "actuator", "sensor", "gateway"]),
   placement: z.string().min(1),
   served_space_ids: z.array(z.string()).default([]),
   layout: z.object({
@@ -186,6 +186,10 @@ function getBlueprintPath(blueprintId: string) {
 export function loadBlueprint(blueprintId: string) {
   const raw = readFileSync(getBlueprintPath(blueprintId), "utf8");
   return blueprintSchema.parse(JSON.parse(raw));
+}
+
+export function parseBlueprint(input: unknown) {
+  return blueprintSchema.parse(input);
 }
 
 export function loadSandboxBlueprint() {

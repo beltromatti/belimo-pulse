@@ -281,6 +281,16 @@ const nonActuatorBehaviors: Record<string, NonActuatorBehavior> = {
       });
     },
   },
+  belimo_edge_building_gateway: {
+    toTelemetry: (device, product, context) =>
+      createActuatorTelemetryRecord(device, product, context.observedAt, {
+        backend_link_state: "connected",
+        connected_device_count: context.zones.size + Object.keys(context.branchFlows).length + 8,
+        uplink_latency_ms: 42,
+        command_queue_depth: 0,
+        field_protocols_active: "bacnet_mstp|modbus_rtu|mp_bus",
+      }),
+  },
 };
 
 export function hasSandboxBehavior(productId: string) {

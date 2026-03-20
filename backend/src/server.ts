@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { BelimoBrainAgent } from "./ai/agent";
 import { BelimoEngine } from "./belimo-engine";
-import { loadSandboxBlueprint } from "./blueprint";
+import { loadSandboxBlueprint, parseBlueprint } from "./blueprint";
 import { loadProductsCatalog } from "./catalog";
 import { allowedOrigins, env } from "./config";
 import {
@@ -24,6 +24,7 @@ import {
 import { BelimoPlatform } from "./platform";
 import { RuntimeSocketMessage } from "./runtime-types";
 import { SandboxDataGenerationEngine } from "./sandbox/engine";
+import { SandboxBuildingGateway } from "./sandbox/gateway";
 import { loadDefaultSandboxTruth } from "./sandbox-truth";
 import { OpenMeteoWeatherService } from "./sandbox/weather";
 
@@ -62,11 +63,12 @@ async function bootstrap() {
   const sandboxTruth = loadDefaultSandboxTruth();
   const weatherService = new OpenMeteoWeatherService(env.OPEN_METEO_BASE_URL);
   const sandboxEngine = new SandboxDataGenerationEngine(sandboxBlueprint, sandboxTruth, productsCatalog.products, weatherService);
+  const sandboxGateway = new SandboxBuildingGateway(sandboxBlueprint, productsCatalog.products, sandboxEngine);
   const belimoEngine = new BelimoEngine(sandboxBlueprint, productsCatalog.products);
   const platform = new BelimoPlatform(
     sandboxBlueprint,
     productsCatalog.products,
-    sandboxEngine,
+    sandboxGateway,
     belimoEngine,
     sandboxEngine.getTickSeconds() * 1000,
   );
@@ -185,6 +187,39 @@ async function bootstrap() {
       brainPolicies: activePolicies,
       websocketPath: "/ws",
     });
+  });
+
+  app.get("/api/gateway/protocol", (_request, response) => {
+    response.json({
+      ok: true,
+      gateway: platform.getGatewayDescriptor(),
+      protocol: platform.getGatewayProtocolDescriptor(),
+      latestSnapshot: platform.getLatestGatewaySnapshot(),
+    });
+  });
+
+  app.post("/api/blueprints/validate", (request, response) => {
+    try {
+      const blueprint = parseBlueprint(request.body?.blueprint ?? request.body);
+      response.status(200).json({
+        ok: true,
+        blueprint: {
+          blueprintId: blueprint.blueprint_id,
+          name: blueprint.building.name,
+          sourceType: blueprint.source_type,
+          floorCount: blueprint.floors.length,
+          spaceCount: blueprint.spaces.length,
+          deviceCount: blueprint.devices.length,
+          airLoopCount: blueprint.systems.air_loops.length,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Blueprint validation failed.";
+      response.status(400).json({
+        ok: false,
+        message,
+      });
+    }
   });
 
   app.post("/api/runtime/control", async (request, response) => {

@@ -854,6 +854,90 @@
       "sandbox_notes": "Keep in the catalog for the later large-building mode where the rooftop unit is replaced by an AHU plus central chilled-water plant."
     },
     {
+      "id": "belimo_edge_building_gateway",
+      "brand": "Belimo",
+      "category": "gateway",
+      "subtype": "building_network_gateway",
+      "abstraction_level": "concept_edge_gateway",
+      "official_reference_models": [
+        "Belimo Gateway"
+      ],
+      "concept_roles": [
+        "building_edge_bridge",
+        "fieldbus_abstraction_layer",
+        "backend_protocol_endpoint"
+      ],
+      "visualization": {
+        "model_id": "belimo_edge_building_gateway",
+        "family": "gateway_appliance",
+        "mount_type": "equipment_base"
+      },
+      "catalog_basis": {
+        "official_specs": {
+          "deployment_role": "Edge gateway bridging building field networks to the Belimo Pulse backend",
+          "northbound_transport": [
+            "WSS JSON"
+          ],
+          "southbound_field_protocols": [
+            "BACnet MS/TP",
+            "BACnet/IP",
+            "Modbus RTU",
+            "Modbus TCP",
+            "MP-Bus"
+          ],
+          "recommended_installation": "Facility office, network rack or controls cabinet with stable power and internet reachability"
+        }
+      },
+      "telemetry_schema": [
+        {
+          "name": "backend_link_state",
+          "type": "string"
+        },
+        {
+          "name": "connected_device_count",
+          "type": "number",
+          "unit": "count"
+        },
+        {
+          "name": "uplink_latency_ms",
+          "type": "number",
+          "unit": "ms"
+        },
+        {
+          "name": "command_queue_depth",
+          "type": "number",
+          "unit": "count"
+        },
+        {
+          "name": "field_protocols_active",
+          "type": "string"
+        }
+      ],
+      "command_schema": [
+        {
+          "name": "telemetry_batch_period_s",
+          "type": "number",
+          "unit": "s",
+          "range": [
+            1,
+            60
+          ],
+          "required": false
+        },
+        {
+          "name": "backend_link_enabled",
+          "type": "boolean",
+          "required": false
+        }
+      ],
+      "sandbox_failure_modes": [
+        "backend_link_drop",
+        "fieldbus_scan_timeout",
+        "gateway_cpu_overload"
+      ],
+      "sandbox_notes": "Concept edge computer that speaks belimo-pulse-gateway.v1 northbound and abstracts all local device connectivity for the backend."
+    },
+    {
       "id": "non_belimo_viessmann_vitocrossal_200_cm2_boiler",
       "brand": "Viessmann",
       "category": "source_equipment",
@@ -1030,6 +1114,11 @@
         "instance_id": "duct-static-1",
         "product_id": "belimo_22adp_154k_differential_pressure_sensor",
         "placement": "main_supply_duct"
+      },
+      {
+        "instance_id": "gateway-1",
+        "product_id": "belimo_edge_building_gateway",
+        "placement": "facility_network_rack"
       },
       {
         "instance_id": "zone-damper-lobby-1",

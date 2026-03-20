@@ -275,6 +275,61 @@ export function BelimoRoomSensorFamily() {
   );
 }
 
+export function BelimoGatewayApplianceFamily() {
+  return (
+    <group>
+      <RoundedBox args={[0.16, 0.02, 0.11]} radius={0.012} smoothness={4} position={[0, -0.04, 0]}>
+        <meshStandardMaterial color={belimoPalette.graphite} roughness={0.74} metalness={0.16} />
+      </RoundedBox>
+      <RoundedBox args={[0.11, 0.11, 0.09]} radius={0.018} smoothness={4} position={[0, 0.03, 0]}>
+        <meshStandardMaterial color={belimoPalette.steel} roughness={0.58} metalness={0.22} />
+      </RoundedBox>
+      <RoundedBox args={[0.116, 0.055, 0.094]} radius={0.014} smoothness={4} position={[0, 0.06, 0]}>
+        <meshStandardMaterial color={belimoPalette.orange} roughness={0.64} metalness={0.08} />
+      </RoundedBox>
+      <RoundedBox args={[0.05, 0.012, 0.03]} radius={0.004} smoothness={3} position={[-0.015, 0.095, 0]}>
+        <meshStandardMaterial color={belimoPalette.black} roughness={0.42} metalness={0.16} />
+      </RoundedBox>
+      <mesh position={[0.042, 0.032, 0.053]}>
+        <boxGeometry args={[0.01, 0.022, 0.02]} />
+        <meshStandardMaterial color={belimoPalette.black} roughness={0.42} metalness={0.22} />
+      </mesh>
+      <mesh position={[0.012, 0.022, 0.052]}>
+        <boxGeometry args={[0.034, 0.012, 0.018]} />
+        <meshStandardMaterial color={belimoPalette.black} roughness={0.42} metalness={0.22} />
+      </mesh>
+      <CableGland position={[0.058, 0.02, -0.035]} />
+      <CableHarness
+        points={[
+          [0.072, 0.02, -0.035],
+          [0.12, 0.034, -0.024],
+          [0.16, 0.04, -0.05],
+        ]}
+      />
+      <CableGland position={[-0.058, 0.02, -0.035]} />
+      <CableHarness
+        points={[
+          [-0.072, 0.02, -0.035],
+          [-0.125, 0.03, -0.024],
+          [-0.17, 0.038, -0.044],
+        ]}
+      />
+      <mesh position={[-0.032, 0.058, 0.053]}>
+        <cylinderGeometry args={[0.0035, 0.0035, 0.02, 12]} />
+        <meshStandardMaterial color={belimoPalette.amber} roughness={0.34} metalness={0.18} />
+      </mesh>
+      <mesh position={[-0.02, 0.058, 0.053]}>
+        <cylinderGeometry args={[0.0035, 0.0035, 0.02, 12]} />
+        <meshStandardMaterial color={belimoPalette.amber} roughness={0.34} metalness={0.18} />
+      </mesh>
+      <mesh position={[-0.008, 0.058, 0.053]}>
+        <cylinderGeometry args={[0.0035, 0.0035, 0.02, 12]} />
+        <meshStandardMaterial color={belimoPalette.amber} roughness={0.34} metalness={0.18} />
+      </mesh>
+    </group>
+  );
+}
+
 function SourceFan() {
   const fanRef = useRef<THREE.Group | null>(null);
 

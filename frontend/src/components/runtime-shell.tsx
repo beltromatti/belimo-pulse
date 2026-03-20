@@ -506,9 +506,11 @@ export function RuntimeShell({
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <BrandLockup />
-                  <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-slate-950">Sandbox Twin</h1>
+                  <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-slate-950">
+                    {initial.blueprint.building.name}
+                  </h1>
                   <p className="mt-2 text-sm leading-6 text-slate-600">
-                    Live facility cockpit for the St. Gallen office sandbox, anchored to the Belimo twin pipeline.
+                    Live facility cockpit for {initial.blueprint.building.name}, anchored to the Belimo twin pipeline.
                   </p>
                 </div>
                 <StatusDot state={connectionState} />

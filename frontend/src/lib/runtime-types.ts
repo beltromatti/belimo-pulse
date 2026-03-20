@@ -23,6 +23,7 @@ export type ProductDefinition = {
       | "belimo_rotary_actuator"
       | "belimo_duct_sensor"
       | "belimo_room_sensor"
+      | "gateway_appliance"
       | "rooftop_unit"
       | "central_plant_module";
     mount_type:
@@ -71,7 +72,7 @@ export type SpaceDefinition = {
 export type DeviceDefinition = {
   id: string;
   product_id: string;
-  kind: "source_equipment" | "actuator" | "sensor";
+  kind: "source_equipment" | "actuator" | "sensor" | "gateway";
   placement: string;
   served_space_ids: string[];
   layout: {

@@ -249,7 +249,13 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function AddBuildingModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+function AddBuildingModal({
+  isOpen,
+  onClose,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+}) {
   const [gatewayId, setGatewayId] = useState("gateway-edge-01");
   const [gatewayEndpoint, setGatewayEndpoint] = useState("wss://gateway.example.com/belimo-pulse");
   const [gatewayToken, setGatewayToken] = useState("facility-token");
@@ -369,12 +375,12 @@ function AddBuildingModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
             <p className="text-xs font-medium uppercase tracking-[0.24em] text-slate-500">Facility Setup</p>
 
             <label className="mt-4 flex cursor-pointer flex-col items-start gap-3 rounded-[1.3rem] border border-dashed border-slate-300 bg-slate-50/80 px-4 py-5 text-sm text-slate-600 transition hover:border-[#d9691f] hover:bg-white">
-              <span className="font-medium text-slate-900">Upload compatible `.json` blueprint</span>
-              <span>Floors, spaces, devices and air loops must match the Belimo Pulse schema.</span>
-              <input type="file" accept=".json,application/json" className="hidden" onChange={handleBlueprintUpload} />
-              <span className="rounded-full bg-[#d9691f] px-4 py-2 text-sm font-medium text-white shadow-[0_14px_32px_rgba(217,105,31,0.26)]">
-                Select Blueprint
-              </span>
+                <span className="font-medium text-slate-900">Upload compatible `.json` blueprint</span>
+                <span>Floors, spaces, devices and air loops must match the Belimo Pulse schema.</span>
+                <input type="file" accept=".json,application/json" className="hidden" onChange={handleBlueprintUpload} />
+                <span className="rounded-full bg-[#d9691f] px-4 py-2 text-sm font-medium text-white shadow-[0_14px_32px_rgba(217,105,31,0.26)]">
+                  Select Blueprint
+                </span>
             </label>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -689,8 +695,12 @@ export function BuildingGateway({
                 <h2 className="mt-5 text-3xl font-semibold tracking-[-0.05em] text-slate-950 sm:text-4xl">
                   {activeBuilding.name}
                 </h2>
-                <p className="mt-2 text-sm uppercase tracking-[0.22em] text-slate-500">{activeBuilding.location}</p>
-                <p className="mt-5 max-w-xl text-base leading-7 text-slate-600">{activeBuilding.summary}</p>
+                <p className="mt-2 text-sm uppercase tracking-[0.22em] text-slate-500">
+                  {activeBuilding.location}
+                </p>
+                <p className="mt-5 max-w-xl text-base leading-7 text-slate-600">
+                  {activeBuilding.summary}
+                </p>
 
                 {activeBuilding.variant === "add" ? (
                   <div className="mt-6 grid gap-3 sm:grid-cols-2">
