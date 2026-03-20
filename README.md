@@ -65,7 +65,7 @@ This complements the main Belimo Pulse platform: the digital twin manages the bu
 
 ## Team
 
-- Mattia Beltrami
-- Abransh Baliyan
-- Hyeongbin Lee
-- Matteo Impieri
+- Mattia Beltrami - Computer Engeenering POLIMI
+- Abransh baliyan - Computer Engeenering POLIMI
+- Hyeongbin Lee - Elettronic Engeenring POLIMI
+- Matteo Impieri - Design POLIMI
