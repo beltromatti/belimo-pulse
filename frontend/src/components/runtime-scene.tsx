@@ -71,10 +71,56 @@ const AUTO_ROTATE_SPEED = 0.45;
 const WALL_HEIGHT = 1.28;
 const WALL_BASE_Y = 0.08;
 const WALL_THICKNESS = 0.16;
+const WINDOW_CENTER_Y = 0.78;
+const WINDOW_PANEL_HEIGHT = 0.88;
 const WINDOW_SURFACE_OFFSET = WALL_THICKNESS / 2 + 0.012;
+const WINDOW_GLASS_THICKNESS = 0.024;
+const WINDOW_GLASS_FACE_OFFSET = WINDOW_GLASS_THICKNESS / 2 + 0.004;
+const WINDOW_FRAME_DEPTH = 0.04;
+const WINDOW_FRAME_BAR = 0.06;
+const WINDOW_EDGE_CLEARANCE = 0.52;
+const WINDOW_PANEL_GAP = 0.28;
+const WINDOW_MIN_PANEL_WIDTH = 0.68;
+const WINDOW_MAX_PANEL_WIDTH = 1.45;
 const HORIZONTAL_WALL_COLOR = "#d8e0ea";
 const VERTICAL_WALL_COLOR = "#c6d0dc";
-const WINDOW_TINT_COLOR = "#d4ebff";
+const WINDOW_TINT_COLOR = "#d7efff";
+const WINDOW_EDGE_TINT_COLOR = "#c7e7ff";
+const WINDOW_GLASS_BODY_COLOR = "#f6fbff";
+
+const GLASS_FRESNEL_VERTEX_SHADER = `
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPosition;
+
+  void main() {
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    vWorldPosition = worldPosition.xyz;
+    vWorldNormal = normalize(mat3(modelMatrix) * normal);
+    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+  }
+`;
+
+const GLASS_FRESNEL_FRAGMENT_SHADER = `
+  uniform vec3 uBaseColor;
+  uniform vec3 uEdgeColor;
+  uniform float uBaseOpacity;
+  uniform float uEdgeOpacity;
+  uniform float uFresnelPower;
+
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPosition;
+
+  void main() {
+    vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
+    float facing = abs(dot(normalize(vWorldNormal), viewDirection));
+    float fresnel = pow(1.0 - facing, uFresnelPower);
+
+    vec3 color = mix(uBaseColor, uEdgeColor, fresnel);
+    float opacity = mix(uBaseOpacity, uEdgeOpacity, fresnel);
+
+    gl_FragColor = vec4(color, opacity);
+  }
+`;
 
 type WallSegmentDefinition = {
   key: string;
@@ -82,6 +128,11 @@ type WallSegmentDefinition = {
   position: [number, number, number];
   size: [number, number, number];
   exterior: boolean;
+};
+
+type LinearSpan = {
+  start: number;
+  end: number;
 };
 
 function roundGeometryValue(value: number) {
@@ -213,6 +264,173 @@ function buildWallSegments(spaces: BuildingBlueprint["spaces"]): WallSegmentDefi
       };
     })
     .sort((left, right) => Number(right.exterior) - Number(left.exterior));
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getWallSpan(space: BuildingBlueprint["spaces"][number], orientationDeg: number) {
+  return orientationDeg === 90 || orientationDeg === 270 ? space.layout.size_m.depth : space.layout.size_m.width;
+}
+
+function subtractLinearSpans(base: LinearSpan, blockers: LinearSpan[]) {
+  if (blockers.length === 0) {
+    return [base];
+  }
+
+  const normalized = blockers
+    .map((blocker) => ({
+      start: clamp(blocker.start, base.start, base.end),
+      end: clamp(blocker.end, base.start, base.end),
+    }))
+    .filter((blocker) => blocker.end - blocker.start > 0.001)
+    .sort((left, right) => left.start - right.start);
+
+  const merged: LinearSpan[] = [];
+
+  for (const blocker of normalized) {
+    const previous = merged.at(-1);
+
+    if (!previous || blocker.start > previous.end + 0.001) {
+      merged.push({ ...blocker });
+      continue;
+    }
+
+    previous.end = Math.max(previous.end, blocker.end);
+  }
+
+  const spans: LinearSpan[] = [];
+  let cursor = base.start;
+
+  for (const blocker of merged) {
+    if (blocker.start > cursor + 0.001) {
+      spans.push({ start: cursor, end: blocker.start });
+    }
+
+    cursor = Math.max(cursor, blocker.end);
+  }
+
+  if (cursor < base.end - 0.001) {
+    spans.push({ start: cursor, end: base.end });
+  }
+
+  return spans;
+}
+
+function getExposedWallSpans(
+  space: BuildingBlueprint["spaces"][number],
+  spaces: BuildingBlueprint["spaces"],
+  orientationDeg: number,
+) {
+  const xStart = space.layout.origin_m.x;
+  const xEnd = xStart + space.layout.size_m.width;
+  const zStart = space.layout.origin_m.y;
+  const zEnd = zStart + space.layout.size_m.depth;
+  const blockers: LinearSpan[] = [];
+
+  for (const other of spaces) {
+    if (other.id === space.id) {
+      continue;
+    }
+
+    const otherXStart = other.layout.origin_m.x;
+    const otherXEnd = otherXStart + other.layout.size_m.width;
+    const otherZStart = other.layout.origin_m.y;
+    const otherZEnd = otherZStart + other.layout.size_m.depth;
+
+    if (orientationDeg === 0 && Math.abs(otherZEnd - zStart) <= 0.001) {
+      const overlapStart = Math.max(xStart, otherXStart);
+      const overlapEnd = Math.min(xEnd, otherXEnd);
+
+      if (overlapEnd - overlapStart > 0.001) {
+        blockers.push({ start: overlapStart - xStart, end: overlapEnd - xStart });
+      }
+    }
+
+    if (orientationDeg === 180 && Math.abs(otherZStart - zEnd) <= 0.001) {
+      const overlapStart = Math.max(xStart, otherXStart);
+      const overlapEnd = Math.min(xEnd, otherXEnd);
+
+      if (overlapEnd - overlapStart > 0.001) {
+        blockers.push({ start: overlapStart - xStart, end: overlapEnd - xStart });
+      }
+    }
+
+    if (orientationDeg === 90 && Math.abs(otherXStart - xEnd) <= 0.001) {
+      const overlapStart = Math.max(zStart, otherZStart);
+      const overlapEnd = Math.min(zEnd, otherZEnd);
+
+      if (overlapEnd - overlapStart > 0.001) {
+        blockers.push({ start: overlapStart - zStart, end: overlapEnd - zStart });
+      }
+    }
+
+    if (orientationDeg === 270 && Math.abs(otherXEnd - xStart) <= 0.001) {
+      const overlapStart = Math.max(zStart, otherZStart);
+      const overlapEnd = Math.min(zEnd, otherZEnd);
+
+      if (overlapEnd - overlapStart > 0.001) {
+        blockers.push({ start: overlapStart - zStart, end: overlapEnd - zStart });
+      }
+    }
+  }
+
+  return subtractLinearSpans({ start: 0, end: getWallSpan(space, orientationDeg) }, blockers);
+}
+
+function buildWindowPanels(
+  space: BuildingBlueprint["spaces"][number],
+  surface: BuildingBlueprint["spaces"][number]["envelope"]["transparent_surfaces"][number],
+  spaces: BuildingBlueprint["spaces"],
+) {
+  const wallSpan = getWallSpan(space, surface.orientation_deg);
+  const exposedSpans = getExposedWallSpans(space, spaces, surface.orientation_deg).filter(
+    (span) => span.end - span.start > WINDOW_MIN_PANEL_WIDTH * 0.9,
+  );
+
+  return exposedSpans.flatMap((span, spanIndex) => {
+    const spanLength = span.end - span.start;
+    const edgeClearance = Math.min(WINDOW_EDGE_CLEARANCE, Math.max(0.18, spanLength * 0.14));
+    const usableSpan = spanLength - edgeClearance * 2;
+
+    if (usableSpan < WINDOW_MIN_PANEL_WIDTH) {
+      return [];
+    }
+
+    let panelCount = spanLength >= 8 ? 3 : spanLength >= 3.8 ? 2 : 1;
+
+    while (panelCount > 1) {
+      const availablePanelWidth = (usableSpan - WINDOW_PANEL_GAP * (panelCount - 1)) / panelCount;
+
+      if (availablePanelWidth >= WINDOW_MIN_PANEL_WIDTH) {
+        break;
+      }
+
+      panelCount -= 1;
+    }
+
+    const totalGap = WINDOW_PANEL_GAP * (panelCount - 1);
+    const maxPanelWidthForSpan = (usableSpan - totalGap) / panelCount;
+
+    if (maxPanelWidthForSpan < WINDOW_MIN_PANEL_WIDTH) {
+      return [];
+    }
+
+    const panelWidth = clamp(maxPanelWidthForSpan * 0.84, WINDOW_MIN_PANEL_WIDTH, WINDOW_MAX_PANEL_WIDTH);
+    const combinedWidth = panelWidth * panelCount + totalGap;
+    const firstPanelCenter = span.start + spanLength / 2 - combinedWidth / 2 + panelWidth / 2;
+
+    return Array.from({ length: panelCount }, (_, panelIndex) => {
+      const panelCenterLocal = firstPanelCenter + panelIndex * (panelWidth + WINDOW_PANEL_GAP);
+
+      return {
+        key: `${surface.surface_id}-span-${spanIndex}-panel-${panelIndex}`,
+        width: panelWidth,
+        offsetAlongWall: panelCenterLocal - wallSpan / 2,
+      };
+    });
+  });
 }
 
 function getRoomCenter(space: BuildingBlueprint["spaces"][number]) {
@@ -426,37 +644,146 @@ function WindowStrip({
   center,
   orientationDeg,
   width,
+  offsetAlongWall,
 }: {
   center: THREE.Vector3;
   orientationDeg: number;
   width: number;
+  offsetAlongWall: number;
 }) {
   const isVerticalWall = orientationDeg === 90 || orientationDeg === 270;
+  const adjustedCenter = isVerticalWall
+    ? new THREE.Vector3(center.x, center.y, center.z + offsetAlongWall)
+    : new THREE.Vector3(center.x + offsetAlongWall, center.y, center.z);
   const position: [number, number, number] =
     orientationDeg === 0
-      ? [center.x, 0.72, center.z - WINDOW_SURFACE_OFFSET]
+      ? [adjustedCenter.x, WINDOW_CENTER_Y, adjustedCenter.z - WINDOW_SURFACE_OFFSET]
       : orientationDeg === 180
-        ? [center.x, 0.72, center.z + WINDOW_SURFACE_OFFSET]
+        ? [adjustedCenter.x, WINDOW_CENTER_Y, adjustedCenter.z + WINDOW_SURFACE_OFFSET]
         : orientationDeg === 90
-          ? [center.x + WINDOW_SURFACE_OFFSET, 0.72, center.z]
-          : [center.x - WINDOW_SURFACE_OFFSET, 0.72, center.z];
-  const rotation: [number, number, number] = isVerticalWall ? [0, Math.PI / 2, 0] : [0, 0, 0];
-
+          ? [adjustedCenter.x + WINDOW_SURFACE_OFFSET, WINDOW_CENTER_Y, adjustedCenter.z]
+          : [adjustedCenter.x - WINDOW_SURFACE_OFFSET, WINDOW_CENTER_Y, adjustedCenter.z];
+  const planeRotation: [number, number, number] = isVerticalWall ? [0, Math.PI / 2, 0] : [0, 0, 0];
+  const outerGlassPosition: [number, number, number] =
+    orientationDeg === 0
+      ? [position[0], position[1], position[2] - WINDOW_GLASS_FACE_OFFSET]
+      : orientationDeg === 180
+        ? [position[0], position[1], position[2] + WINDOW_GLASS_FACE_OFFSET]
+        : orientationDeg === 90
+          ? [position[0] + WINDOW_GLASS_FACE_OFFSET, position[1], position[2]]
+          : [position[0] - WINDOW_GLASS_FACE_OFFSET, position[1], position[2]];
+  const innerGlassPosition: [number, number, number] =
+    orientationDeg === 0
+      ? [position[0], position[1], position[2] + WINDOW_GLASS_FACE_OFFSET]
+      : orientationDeg === 180
+        ? [position[0], position[1], position[2] - WINDOW_GLASS_FACE_OFFSET]
+        : orientationDeg === 90
+          ? [position[0] - WINDOW_GLASS_FACE_OFFSET, position[1], position[2]]
+          : [position[0] + WINDOW_GLASS_FACE_OFFSET, position[1], position[2]];
+  const topFramePosition: [number, number, number] = [position[0], position[1] + WINDOW_PANEL_HEIGHT / 2, position[2]];
+  const bottomFramePosition: [number, number, number] = [position[0], position[1] - WINDOW_PANEL_HEIGHT / 2, position[2]];
+  const leadingFramePosition: [number, number, number] = isVerticalWall
+    ? [position[0], position[1], position[2] - width / 2]
+    : [position[0] - width / 2, position[1], position[2]];
+  const trailingFramePosition: [number, number, number] = isVerticalWall
+    ? [position[0], position[1], position[2] + width / 2]
+    : [position[0] + width / 2, position[1], position[2]];
+  const horizontalFrameArgs: [number, number, number] = isVerticalWall
+    ? [WINDOW_FRAME_DEPTH, WINDOW_FRAME_BAR, width + WINDOW_FRAME_BAR]
+    : [width + WINDOW_FRAME_BAR, WINDOW_FRAME_BAR, WINDOW_FRAME_DEPTH];
+  const verticalFrameArgs: [number, number, number] = isVerticalWall
+    ? [WINDOW_FRAME_DEPTH, WINDOW_PANEL_HEIGHT + WINDOW_FRAME_BAR, WINDOW_FRAME_BAR]
+    : [WINDOW_FRAME_BAR, WINDOW_PANEL_HEIGHT + WINDOW_FRAME_BAR, WINDOW_FRAME_DEPTH];
   return (
-    <mesh position={position} rotation={rotation} renderOrder={3}>
-      <planeGeometry args={[width, 1.02]} />
-      <meshStandardMaterial
-        color={WINDOW_TINT_COLOR}
-        transparent
-        opacity={0.68}
-        emissive="#8ec5f8"
-        emissiveIntensity={0.18}
-        depthWrite={false}
-        polygonOffset
-        polygonOffsetFactor={-1}
-        side={THREE.DoubleSide}
-      />
-    </mesh>
+    <group>
+      <RoundedBox
+        args={horizontalFrameArgs}
+        radius={0.012}
+        smoothness={2}
+        position={topFramePosition}
+      >
+        <meshStandardMaterial color="#cedae6" metalness={0.04} roughness={0.4} />
+      </RoundedBox>
+      <RoundedBox
+        args={horizontalFrameArgs}
+        radius={0.012}
+        smoothness={2}
+        position={bottomFramePosition}
+      >
+        <meshStandardMaterial
+          color="#cedae6"
+          metalness={0.04}
+          roughness={0.4}
+        />
+      </RoundedBox>
+      <RoundedBox args={verticalFrameArgs} radius={0.012} smoothness={2} position={leadingFramePosition}>
+        <meshStandardMaterial color="#cedae6" metalness={0.04} roughness={0.4} />
+      </RoundedBox>
+      <RoundedBox args={verticalFrameArgs} radius={0.012} smoothness={2} position={trailingFramePosition}>
+        <meshStandardMaterial color="#cedae6" metalness={0.04} roughness={0.4} />
+      </RoundedBox>
+      <RoundedBox
+        args={
+          isVerticalWall
+            ? [WINDOW_GLASS_THICKNESS, WINDOW_PANEL_HEIGHT - 0.04, Math.max(width - 0.04, 0.12)]
+            : [Math.max(width - 0.04, 0.12), WINDOW_PANEL_HEIGHT - 0.04, WINDOW_GLASS_THICKNESS]
+        }
+        radius={0.008}
+        smoothness={3}
+        position={position}
+        renderOrder={3}
+      >
+        <meshStandardMaterial
+          color={WINDOW_GLASS_BODY_COLOR}
+          transparent
+          opacity={0.26}
+          roughness={0.08}
+          metalness={0.02}
+          emissive="#e8f4ff"
+          emissiveIntensity={0.025}
+        />
+      </RoundedBox>
+      <mesh position={outerGlassPosition} rotation={planeRotation} renderOrder={4}>
+        <planeGeometry args={[width - 0.04, WINDOW_PANEL_HEIGHT - 0.04]} />
+        <shaderMaterial
+          uniforms={{
+            uBaseColor: { value: new THREE.Color("#f1f9ff") },
+            uEdgeColor: { value: new THREE.Color(WINDOW_EDGE_TINT_COLOR) },
+            uBaseOpacity: { value: 0.14 },
+            uEdgeOpacity: { value: 0.19 },
+            uFresnelPower: { value: 1.65 },
+          }}
+          vertexShader={GLASS_FRESNEL_VERTEX_SHADER}
+          fragmentShader={GLASS_FRESNEL_FRAGMENT_SHADER}
+          transparent
+          toneMapped={false}
+          depthWrite={false}
+          side={THREE.DoubleSide}
+          polygonOffset
+          polygonOffsetFactor={-1}
+        />
+      </mesh>
+      <mesh position={innerGlassPosition} rotation={planeRotation} renderOrder={4}>
+        <planeGeometry args={[width - 0.04, WINDOW_PANEL_HEIGHT - 0.04]} />
+        <shaderMaterial
+          uniforms={{
+            uBaseColor: { value: new THREE.Color("#f6fbff") },
+            uEdgeColor: { value: new THREE.Color(WINDOW_TINT_COLOR) },
+            uBaseOpacity: { value: 0.09 },
+            uEdgeOpacity: { value: 0.13 },
+            uFresnelPower: { value: 1.8 },
+          }}
+          vertexShader={GLASS_FRESNEL_VERTEX_SHADER}
+          fragmentShader={GLASS_FRESNEL_FRAGMENT_SHADER}
+          transparent
+          toneMapped={false}
+          depthWrite={false}
+          side={THREE.DoubleSide}
+          polygonOffset
+          polygonOffsetFactor={-1}
+        />
+      </mesh>
+    </group>
   );
 }
 
@@ -971,28 +1298,24 @@ function RuntimeSceneContent({
               <ComfortGlow center={center} zone={zone} roomWidth={space.layout.size_m.width} />
 
               {space.envelope.transparent_surfaces.map((surface) => {
-                const wallSpan =
-                  surface.orientation_deg === 90 || surface.orientation_deg === 270
-                    ? space.layout.size_m.depth
-                    : space.layout.size_m.width;
-                const width = Math.min(wallSpan - 0.8, Math.max(1.2, surface.area_m2 / 1.4));
                 const windowCenter =
                   surface.orientation_deg === 0
-                    ? new THREE.Vector3(center.x, 0.72, space.layout.origin_m.y)
+                    ? new THREE.Vector3(center.x, WINDOW_CENTER_Y, space.layout.origin_m.y)
                     : surface.orientation_deg === 180
-                      ? new THREE.Vector3(center.x, 0.72, space.layout.origin_m.y + space.layout.size_m.depth)
+                      ? new THREE.Vector3(center.x, WINDOW_CENTER_Y, space.layout.origin_m.y + space.layout.size_m.depth)
                       : surface.orientation_deg === 90
-                        ? new THREE.Vector3(space.layout.origin_m.x + space.layout.size_m.width, 0.72, center.z)
-                        : new THREE.Vector3(space.layout.origin_m.x, 0.72, center.z);
+                        ? new THREE.Vector3(space.layout.origin_m.x + space.layout.size_m.width, WINDOW_CENTER_Y, center.z)
+                        : new THREE.Vector3(space.layout.origin_m.x, WINDOW_CENTER_Y, center.z);
 
-                return (
+                return buildWindowPanels(space, surface, blueprint.spaces).map((panel) => (
                   <WindowStrip
-                    key={surface.surface_id}
+                    key={panel.key}
                     center={windowCenter}
                     orientationDeg={surface.orientation_deg}
-                    width={width}
+                    width={panel.width}
+                    offsetAlongWall={panel.offsetAlongWall}
                   />
-                );
+                ));
               })}
 
               <DuctSegment from={trunkJunction} to={branchHorizontal} color={ductColor} />
