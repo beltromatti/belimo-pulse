@@ -51,7 +51,7 @@ Belimo Pulse can:
 
 ## Team
 
-- Mattia Beltrami - Computer Engeenering POLIMI
-- Abransh baliyan - Computer Engeenering POLIMI
-- Hyeongbin Lee - Elettronic Engeenring POLIMI
-- Matteo Impieri - Design POLIMI
+Mattia Beltrami | Computer Engineering @ Politecnico di Milano
+Abransh Baliyan | Computer Engineering @ Politecnico di Milano
+Hyeongbin Lee | Electronic Engineering @ Politecnico di Milano
+Matteo Impieri | Design @ Politecnico di Milano
