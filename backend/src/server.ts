@@ -5,7 +5,6 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { z } from "zod";
 
-import { BelimoBrainAgent } from "./ai/agent";
 import { BelimoEngine } from "./belimo-engine";
 import { loadSandboxBlueprint, parseBlueprint } from "./blueprint";
 import { loadProductsCatalog } from "./catalog";
@@ -91,18 +90,12 @@ async function bootstrap() {
     belimoEngine,
     sandboxEngine,
     sandboxEngine.getTickSeconds() * 1000,
-  );
-
-  const brainAgent = new BelimoBrainAgent(
-    platform,
-    env.OPENAI_API_KEY,
-    env.OPENAI_MODEL,
-    env.OPENAI_REASONING_EFFORT,
-    env.BELIMO_BRAIN_ANALYSIS_INTERVAL_TICKS,
+    env.DATABASE_RETENTION_DAYS,
+    env.DATABASE_MAINTENANCE_INTERVAL_HOURS * 60 * 60 * 1000,
+    env.DASHBOARD_IDLE_RESET_HOURS * 60 * 60 * 1000,
   );
 
   await platform.hydrateFromDatabase();
-  await brainAgent.hydrate();
   await platform.start();
 
   const app = express();
@@ -144,10 +137,8 @@ async function bootstrap() {
           lastError: platform.getLastError(),
         },
         belimoBrain: {
-          status: "running",
-          model: env.OPENAI_MODEL,
-          reasoningEffort: env.OPENAI_REASONING_EFFORT,
-          activeAlertCount: brainAgent.getActiveAlerts().length,
+          status: "disabled",
+          activeAlertCount: 0,
           activePolicyCount: activePolicies.length,
         },
       },
@@ -203,7 +194,7 @@ async function bootstrap() {
     response.json({
       ok: true,
       payload: platform.getBootstrapPayload(),
-      brainAlerts: brainAgent.getActiveAlerts(),
+      brainAlerts: [],
       brainPolicies: activePolicies,
       websocketPath: "/ws",
     });
@@ -351,12 +342,10 @@ async function bootstrap() {
 
   app.post("/api/chat", async (request, response) => {
     try {
-      const payload = chatSchema.parse(request.body ?? {});
-      const result = await brainAgent.chat(payload.message, payload.conversationId ?? undefined);
-
-      response.json({
-        ok: true,
-        ...result,
+      chatSchema.parse(request.body ?? {});
+      response.status(410).json({
+        ok: false,
+        message: "Belimo Brain is disabled for this delivery build.",
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI chat request failed.";
@@ -372,7 +361,7 @@ async function bootstrap() {
   const sendBrainAlerts = (_request: express.Request, response: express.Response) => {
     response.json({
       ok: true,
-      alerts: brainAgent.getActiveAlerts(),
+      alerts: [],
     });
   };
 
@@ -400,10 +389,9 @@ async function bootstrap() {
       return;
     }
 
-    await brainAgent.dismissAlert(alertId);
-
-    response.json({
-      ok: true,
+    response.status(410).json({
+      ok: false,
+      message: "Belimo Brain is disabled for this delivery build.",
     });
   };
 
@@ -482,29 +470,11 @@ async function bootstrap() {
     });
   });
 
-  const unsubscribeBelimoBrainAlerts = brainAgent.onAlert((alert) => {
-    broadcastSocketMessage({
-      type: "brain_alert",
-      payload: {
-        id: alert.id,
-        severity: alert.severity,
-        title: alert.title,
-        body: alert.body,
-        suggestedAction: alert.suggestedAction,
-        timestamp: alert.timestamp,
-      },
-    });
-  });
-
   const unsubscribe = platform.onTick((payload) => {
     broadcastSocketMessage({
       type: "tick",
       payload,
     });
-
-    if (payload.twin) {
-      brainAgent.handleTick(payload.twin, payload.controls);
-    }
   });
 
   const unsubscribeSimulationPreview = platform.onSimulationPreview((preview) => {
@@ -521,7 +491,6 @@ async function bootstrap() {
   const shutdown = async () => {
     unsubscribe();
     unsubscribeSimulationPreview();
-    unsubscribeBelimoBrainAlerts();
     wss.close();
     await platform.stop();
     server.close(async () => {

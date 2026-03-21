@@ -26,13 +26,9 @@ const envSchema = z.object({
     .default("true")
     .transform((value) => value === "true"),
   ALLOWED_ORIGINS: z.string().default("http://localhost:3000,https://belimo-pulse.vercel.app"),
-  OPENAI_API_KEY: z
-    .string()
-    .min(1, "OPENAI_API_KEY is required")
-    .transform((value) => value.trim()),
-  OPENAI_MODEL: z.string().default("gpt-5.4"),
-  OPENAI_REASONING_EFFORT: z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]).default("medium"),
-  BELIMO_BRAIN_ANALYSIS_INTERVAL_TICKS: z.coerce.number().int().min(1).max(720).default(12),
+  DATABASE_RETENTION_DAYS: z.coerce.number().int().min(7).max(365).default(30),
+  DATABASE_MAINTENANCE_INTERVAL_HOURS: z.coerce.number().int().min(24).max(24 * 30).default(24 * 7),
+  DASHBOARD_IDLE_RESET_HOURS: z.coerce.number().int().min(1).max(24 * 7).default(1),
   OPEN_METEO_BASE_URL: z.string().url().default("https://api.open-meteo.com/v1/forecast"),
 });
 

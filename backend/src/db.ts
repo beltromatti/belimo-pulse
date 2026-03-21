@@ -243,6 +243,138 @@ export async function getDatabaseHealth() {
   return result.rows[0];
 }
 
+export async function cleanupHistoricalRuntimeData(retentionDays: number) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const deleteCount = async (sql: string) => {
+      const result = await client.query<{ deleted_count: string }>(sql, [retentionDays]);
+      return Number(result.rows[0]?.deleted_count ?? 0);
+    };
+
+    const deleted = {
+      weatherObservations: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_weather_observations
+          WHERE observed_at < NOW() - ($1::INT * INTERVAL '1 day')
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+      deviceObservations: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_device_observations
+          WHERE observed_at < NOW() - ($1::INT * INTERVAL '1 day')
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+      twinSnapshots: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_twin_snapshots
+          WHERE observed_at < NOW() - ($1::INT * INTERVAL '1 day')
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+      runtimeFrames: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_runtime_frames
+          WHERE observed_at < NOW() - ($1::INT * INTERVAL '1 day')
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+      zoneTwinObservations: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_zone_twin_observations
+          WHERE observed_at < NOW() - ($1::INT * INTERVAL '1 day')
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+      deviceDiagnoses: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_device_diagnoses
+          WHERE observed_at < NOW() - ($1::INT * INTERVAL '1 day')
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+      controlEvents: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_control_events
+          WHERE created_at < NOW() - ($1::INT * INTERVAL '1 day')
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+      healthchecks: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_healthchecks
+          WHERE created_at < NOW() - ($1::INT * INTERVAL '1 day')
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+      brainMessages: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_belimo_brain_messages
+          WHERE message_timestamp < NOW() - ($1::INT * INTERVAL '1 day')
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+      dismissedBrainAlerts: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_belimo_brain_alerts
+          WHERE dismissed = TRUE
+            AND updated_at < NOW() - ($1::INT * INTERVAL '1 day')
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+      supersededPolicies: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_operator_policies
+          WHERE status <> 'active'
+            AND updated_at < NOW() - ($1::INT * INTERVAL '1 day')
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+      staleBrainConversations: await deleteCount(`
+        WITH deleted AS (
+          DELETE FROM pulse_belimo_brain_conversations conversation
+          WHERE conversation.updated_at < NOW() - ($1::INT * INTERVAL '1 day')
+            AND NOT EXISTS (
+              SELECT 1
+              FROM pulse_belimo_brain_messages message
+              WHERE message.conversation_id = conversation.conversation_id
+            )
+          RETURNING 1
+        )
+        SELECT COUNT(*)::TEXT AS deleted_count FROM deleted
+      `),
+    };
+
+    await client.query("COMMIT");
+
+    return {
+      retentionDays,
+      deleted,
+      totalDeleted: Object.values(deleted).reduce((sum, value) => sum + value, 0),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function createHealthcheck(source: string, note: string) {
   const result = await pool.query<{
     id: string;
@@ -594,9 +726,10 @@ export async function upsertFacilityPreferences(buildingId: string, preferences:
 export async function getFacilityPreferences(buildingId: string, fallback: RuntimeControlState) {
   const result = await pool.query<{
     preferences: unknown;
+    updated_at: string;
   }>(
     `
-      SELECT preferences
+      SELECT preferences, updated_at::TEXT
       FROM pulse_facility_preferences
       WHERE building_id = $1
       LIMIT 1
@@ -608,7 +741,10 @@ export async function getFacilityPreferences(buildingId: string, fallback: Runti
     return null;
   }
 
-  return normalizeRuntimeControlState(result.rows[0].preferences, fallback);
+  return {
+    preferences: normalizeRuntimeControlState(result.rows[0].preferences, fallback),
+    updatedAt: result.rows[0].updated_at,
+  };
 }
 
 export async function upsertEffectiveControlState(buildingId: string, resolution: RuntimeControlResolution) {

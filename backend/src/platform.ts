@@ -16,6 +16,7 @@ import {
 } from "./control-intelligence";
 import { applyRuntimeControlInput, cloneRuntimeControlState } from "./control-state";
 import {
+  cleanupHistoricalRuntimeData,
   getFacilityPreferences,
   getLatestTwinSnapshot,
   getRuntimePersistenceSummary,
@@ -62,9 +63,13 @@ type RecentRuntimeSnapshot = {
 export class BelimoPlatform {
   private schedulerHandle: NodeJS.Timeout | null = null;
 
+  private databaseMaintenanceHandle: NodeJS.Timeout | null = null;
+
   private schedulerActive = false;
 
   private isTickRunning = false;
+
+  private isDatabaseMaintenanceRunning = false;
 
   private latestSandboxBatch: SandboxTickResult | null = null;
 
@@ -88,6 +93,8 @@ export class BelimoPlatform {
 
   private readonly simulationPreviewListeners = new Set<SimulationPreviewListener>();
 
+  private readonly defaultManualControls: RuntimeControlState;
+
   private manualControls: RuntimeControlState;
 
   private controlResolution: RuntimeControlResolution;
@@ -100,6 +107,8 @@ export class BelimoPlatform {
 
   private virtualClockMs: number | null = null;
 
+  private lastDashboardInteractionAtMs: number | null = null;
+
   constructor(
     private readonly blueprint: BuildingBlueprint,
     private readonly products: ProductDefinition[],
@@ -109,8 +118,12 @@ export class BelimoPlatform {
     },
     private readonly sandboxEngine: SandboxDataGenerationEngine,
     private readonly baseTickIntervalMs: number,
+    private readonly databaseRetentionDays: number,
+    private readonly databaseMaintenanceIntervalMs: number,
+    private readonly dashboardIdleResetMs: number,
   ) {
     const initialControls = this.buildingGateway.getControlState();
+    this.defaultManualControls = cloneRuntimeControlState(initialControls);
     this.manualControls = cloneRuntimeControlState(initialControls);
     this.controlResolution = createRuntimeControlResolution(initialControls);
   }
@@ -120,6 +133,7 @@ export class BelimoPlatform {
     await upsertBlueprintRecord(this.blueprint);
     await upsertFacilityPreferences(this.blueprint.blueprint_id, this.manualControls);
     await this.refreshEffectiveControls(this.peekRuntimeNow(), "belimo-brain-scheduler");
+    this.scheduleDatabaseMaintenance(30_000);
     await this.runTick();
   }
 
@@ -128,6 +142,10 @@ export class BelimoPlatform {
     if (this.schedulerHandle) {
       clearTimeout(this.schedulerHandle);
       this.schedulerHandle = null;
+    }
+    if (this.databaseMaintenanceHandle) {
+      clearTimeout(this.databaseMaintenanceHandle);
+      this.databaseMaintenanceHandle = null;
     }
   }
 
@@ -237,6 +255,7 @@ export class BelimoPlatform {
   ) {
     const previousManualControls = this.manualControls;
     this.manualControls = applyRuntimeControlInput(this.manualControls, input);
+    this.lastDashboardInteractionAtMs = Date.now();
     this.syncRuntimeClockMode(previousManualControls, this.manualControls);
     if (options?.triggerSimulationPreview !== false) {
       this.automaticRemediationStates.clear();
@@ -267,13 +286,20 @@ export class BelimoPlatform {
   async hydrateFromDatabase() {
     this.latestTwinSnapshot = await getLatestTwinSnapshot(this.blueprint.blueprint_id);
     this.persistenceSummary = await getRuntimePersistenceSummary(this.blueprint.blueprint_id);
-    const storedPreferences = await getFacilityPreferences(this.blueprint.blueprint_id, this.manualControls);
+    const storedPreferences = await getFacilityPreferences(this.blueprint.blueprint_id, this.defaultManualControls);
 
     if (storedPreferences) {
       const previousManualControls = this.manualControls;
-      this.manualControls = storedPreferences;
-      this.controlResolution = createRuntimeControlResolution(storedPreferences);
+      this.manualControls = storedPreferences.preferences;
+      this.controlResolution = createRuntimeControlResolution(storedPreferences.preferences);
       this.syncRuntimeClockMode(previousManualControls, this.manualControls);
+      const updatedAtMs = Date.parse(storedPreferences.updatedAt);
+      this.lastDashboardInteractionAtMs = Number.isNaN(updatedAtMs) ? null : updatedAtMs;
+    }
+
+    if (this.shouldResetDashboardToDefaults(Date.now())) {
+      this.applyDefaultManualControls();
+      this.lastDashboardInteractionAtMs = Date.now();
     }
 
     if (this.latestTwinSnapshot?.observedAt) {
@@ -290,6 +316,7 @@ export class BelimoPlatform {
 
     try {
       const now = this.getRuntimeNow();
+      await this.maybeResetDashboardToDefaults(now);
       await this.refreshEffectiveControls(now, "belimo-brain-scheduler");
       const gatewayPoll = await this.buildingGateway.pollSnapshot(now);
       const batch = gatewayPoll.batch;
@@ -345,6 +372,55 @@ export class BelimoPlatform {
     return Math.max(250, Math.round(this.baseTickIntervalMs / this.manualControls.timeSpeedMultiplier));
   }
 
+  private controlStateSignature(state: RuntimeControlState) {
+    return JSON.stringify(state);
+  }
+
+  private isManualControlsAtDefaults() {
+    return this.controlStateSignature(this.manualControls) === this.controlStateSignature(this.defaultManualControls);
+  }
+
+  private shouldResetDashboardToDefaults(nowMs: number) {
+    return (
+      !this.isManualControlsAtDefaults() &&
+      this.lastDashboardInteractionAtMs !== null &&
+      nowMs - this.lastDashboardInteractionAtMs >= this.dashboardIdleResetMs
+    );
+  }
+
+  private applyDefaultManualControls() {
+    const previousManualControls = this.manualControls;
+    this.manualControls = cloneRuntimeControlState(this.defaultManualControls);
+    this.controlResolution = createRuntimeControlResolution(this.manualControls);
+    this.syncRuntimeClockMode(previousManualControls, this.manualControls);
+    this.latestSimulationPreview = null;
+    this.automaticRemediationStates.clear();
+  }
+
+  private async maybeResetDashboardToDefaults(now: Date) {
+    const nowMs = now.getTime();
+
+    if (!this.shouldResetDashboardToDefaults(nowMs)) {
+      return false;
+    }
+
+    const previousManualControls = this.getManualControls();
+    const idleMinutes = this.lastDashboardInteractionAtMs
+      ? Math.max(1, Math.round((nowMs - this.lastDashboardInteractionAtMs) / 60_000))
+      : null;
+
+    this.applyDefaultManualControls();
+    this.lastDashboardInteractionAtMs = nowMs;
+    await upsertFacilityPreferences(this.blueprint.blueprint_id, this.manualControls);
+    await insertControlEvent(this.blueprint.blueprint_id, "dashboard-idle-reset", "dashboard_idle_reset", {
+      idleMinutes,
+      previousManualControls,
+      resetManualControls: this.getManualControls(),
+    });
+
+    return true;
+  }
+
   private scheduleNextTick() {
     if (!this.schedulerActive) {
       return;
@@ -356,6 +432,43 @@ export class BelimoPlatform {
     }
 
     this.schedulerHandle = setTimeout(() => void this.runTick(), this.computeTickIntervalMs());
+  }
+
+  private scheduleDatabaseMaintenance(delayMs = this.databaseMaintenanceIntervalMs) {
+    if (!this.schedulerActive) {
+      return;
+    }
+
+    if (this.databaseMaintenanceHandle) {
+      clearTimeout(this.databaseMaintenanceHandle);
+      this.databaseMaintenanceHandle = null;
+    }
+
+    this.databaseMaintenanceHandle = setTimeout(() => void this.runDatabaseMaintenance(), delayMs);
+  }
+
+  private async runDatabaseMaintenance() {
+    if (!this.schedulerActive || this.isDatabaseMaintenanceRunning) {
+      return;
+    }
+
+    this.isDatabaseMaintenanceRunning = true;
+
+    try {
+      const result = await cleanupHistoricalRuntimeData(this.databaseRetentionDays);
+
+      if (result.totalDeleted > 0) {
+        console.info(
+          `Belimo platform database retention removed ${result.totalDeleted} rows older than ${result.retentionDays} days.`,
+          result.deleted,
+        );
+      }
+    } catch (error) {
+      console.error("Belimo platform database retention cleanup failed", error);
+    } finally {
+      this.isDatabaseMaintenanceRunning = false;
+      this.scheduleDatabaseMaintenance();
+    }
   }
 
   private getRuntimeNow() {
